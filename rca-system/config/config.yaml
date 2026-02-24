@@ -1,0 +1,57 @@
+# RCA System Configuration
+
+system:
+  name: "AI-Powered Root Cause Analysis System"
+  version: "1.0.0"
+  log_level: "INFO"
+
+data:
+  sampling_interval_minutes: 5
+  min_training_days: 30
+  max_missing_pct: 5.0
+  window_size: 60           # timesteps per LSTM window (60 × 5min = 5 hours)
+  train_stride: 5           # step between training windows
+  inference_stride: 1       # step between inference windows
+
+model:
+  hidden_size: 64
+  latent_size: 32
+  num_layers: 2
+  dropout: 0.2
+  learning_rate: 0.001
+  epochs: 50
+  batch_size: 32
+  early_stopping_patience: 10
+  threshold_percentile: 99.0
+  anomaly_score_threshold: 1.0
+
+causal_inference:
+  max_lag: 10               # maximum lag (timesteps) for Granger causality
+  significance_level: 0.05  # p-value threshold
+  min_anomaly_score: 0.5    # only consider metrics above this score
+
+root_cause_ranking:
+  weights:
+    causal_outflow: 0.40
+    causal_inflow: 0.20
+    temporal: 0.30
+    severity: 0.05
+    event: 0.05
+  top_n: 5
+
+reporting:
+  formats:
+    - json
+    - text
+  include_justification: true
+  include_causal_chain: true
+  include_timing: true
+
+performance_targets:
+  anomaly_detection_max_sec: 300      # 5 minutes
+  causal_inference_max_sec: 600       # 10 minutes
+  report_generation_max_sec: 120      # 2 minutes
+  top_1_accuracy_target: 0.65
+  top_3_accuracy_target: 0.85
+  false_positive_rate_target: 0.05
+  false_negative_rate_target: 0.05

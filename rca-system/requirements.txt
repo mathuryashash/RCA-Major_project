@@ -1,0 +1,30 @@
+# Core Dependencies
+torch==2.0.0
+numpy==1.24.0
+pandas==2.0.0
+scikit-learn==1.3.0
+scipy==1.11.0
+statsmodels==0.14.0
+
+# Causal Inference
+causal-learn==0.1.3.8
+
+# Graph Processing
+networkx==3.1
+
+# Visualization & Dashboard
+plotly==5.14.0
+streamlit==1.25.0
+matplotlib==3.7.0
+seaborn==0.12.0
+
+# Monitoring Integration (optional)
+prometheus-api-client==0.5.3
+boto3==1.28.0
+
+# Testing
+pytest==7.4.0
+pytest-cov==4.1.0
+
+# Code formatting
+black==23.7.0
