@@ -336,6 +336,144 @@ section[data-testid="stSidebar"] .stRadio > label {
     letter-spacing: 0.08em;
     font-weight: 500;
 }
+
+/* ── Pipeline flow diagram ───────────────────────────────────── */
+.pipeline-flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin: 1.5rem 0;
+    flex-wrap: wrap;
+}
+
+.pipeline-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: rgba(30, 33, 48, 0.6);
+    border: 1px solid rgba(102, 126, 234, 0.15);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    min-width: 120px;
+    transition: all 0.4s ease;
+    position: relative;
+}
+
+.pipeline-step:hover {
+    border-color: rgba(102, 126, 234, 0.5);
+    transform: translateY(-4px);
+    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.2);
+}
+
+.pipeline-step .step-icon {
+    font-size: 1.8rem;
+    margin-bottom: 0.4rem;
+}
+
+.pipeline-step .step-label {
+    font-size: 0.75rem;
+    color: #a0aec0;
+    text-align: center;
+    font-weight: 500;
+    line-height: 1.3;
+}
+
+.pipeline-arrow {
+    font-size: 1.2rem;
+    color: rgba(102, 126, 234, 0.5);
+    margin: 0 0.3rem;
+    animation: arrowPulse 2s ease-in-out infinite;
+}
+
+@keyframes arrowPulse {
+    0%, 100% { opacity: 0.4; transform: translateX(0); }
+    50% { opacity: 1; transform: translateX(3px); }
+}
+
+/* ── Metric preview grid ─────────────────────────────────────── */
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.6rem;
+    margin: 1rem 0;
+}
+
+.metric-chip {
+    background: rgba(30, 33, 48, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    padding: 0.6rem 0.8rem;
+    text-align: center;
+    transition: all 0.3s ease;
+    cursor: default;
+}
+
+.metric-chip:hover {
+    border-color: rgba(102, 126, 234, 0.4);
+    background: rgba(102, 126, 234, 0.08);
+    transform: scale(1.05);
+}
+
+.metric-chip .chip-icon {
+    font-size: 1.3rem;
+    display: block;
+    margin-bottom: 0.2rem;
+}
+
+.metric-chip .chip-name {
+    font-size: 0.7rem;
+    color: #8892b0;
+    font-weight: 500;
+}
+
+/* ── What happens section ────────────────────────────────────── */
+.step-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    margin: 1rem 0;
+}
+
+.timeline-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.8rem;
+    padding: 0.8rem 1rem;
+    background: rgba(30, 33, 48, 0.4);
+    border-radius: 10px;
+    border-left: 3px solid rgba(102, 126, 234, 0.3);
+    transition: all 0.3s ease;
+}
+
+.timeline-item:hover {
+    background: rgba(102, 126, 234, 0.06);
+    border-left-color: #667eea;
+}
+
+.timeline-num {
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.timeline-text {
+    font-size: 0.85rem;
+    color: #c4cef5;
+    line-height: 1.4;
+}
+
+.timeline-text b {
+    color: #e2e8f0;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -780,6 +918,63 @@ if pipeline_state == "1 — Data Generation & Training":
     </div>
     """, unsafe_allow_html=True)
 
+    # ── Pipeline Architecture Diagram ──
+    st.markdown("""
+    <div class="glass-card fade-in">
+        <div style="font-weight:600; color:#e2e8f0; margin-bottom:0.8rem; font-size:0.95rem;">🔄 Pipeline Architecture</div>
+        <div class="pipeline-flow">
+            <div class="pipeline-step">
+                <span class="step-icon">📊</span>
+                <span class="step-label">Synthetic<br>Data Gen</span>
+            </div>
+            <span class="pipeline-arrow">→</span>
+            <div class="pipeline-step">
+                <span class="step-icon">🔧</span>
+                <span class="step-label">Normalize<br>& Window</span>
+            </div>
+            <span class="pipeline-arrow">→</span>
+            <div class="pipeline-step">
+                <span class="step-icon">🧠</span>
+                <span class="step-label">LSTM<br>Autoencoder</span>
+            </div>
+            <span class="pipeline-arrow">→</span>
+            <div class="pipeline-step">
+                <span class="step-icon">🚨</span>
+                <span class="step-label">Anomaly<br>Detection</span>
+            </div>
+            <span class="pipeline-arrow">→</span>
+            <div class="pipeline-step">
+                <span class="step-icon">🔗</span>
+                <span class="step-label">Granger<br>Causality</span>
+            </div>
+            <span class="pipeline-arrow">→</span>
+            <div class="pipeline-step">
+                <span class="step-icon">🏆</span>
+                <span class="step-label">Root Cause<br>Ranking</span>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Metrics Being Tracked ──
+    st.markdown("""
+    <div class="glass-card fade-in">
+        <div style="font-weight:600; color:#e2e8f0; margin-bottom:0.8rem; font-size:0.95rem;">📡 10 Metrics Being Tracked</div>
+        <div class="metric-grid">
+            <div class="metric-chip"><span class="chip-icon">⚡</span><span class="chip-name">CPU Usage</span></div>
+            <div class="metric-chip"><span class="chip-icon">💾</span><span class="chip-name">Memory %</span></div>
+            <div class="metric-chip"><span class="chip-icon">💿</span><span class="chip-name">Disk I/O</span></div>
+            <div class="metric-chip"><span class="chip-icon">🌐</span><span class="chip-name">Error Rate</span></div>
+            <div class="metric-chip"><span class="chip-icon">🚀</span><span class="chip-name">Throughput</span></div>
+            <div class="metric-chip"><span class="chip-icon">⏱️</span><span class="chip-name">Latency P50</span></div>
+            <div class="metric-chip"><span class="chip-icon">📈</span><span class="chip-name">Latency P95</span></div>
+            <div class="metric-chip"><span class="chip-icon">📊</span><span class="chip-name">Latency P99</span></div>
+            <div class="metric-chip"><span class="chip-icon">🗄️</span><span class="chip-name">DB Conns</span></div>
+            <div class="metric-chip"><span class="chip-icon">💎</span><span class="chip-name">Cache Hit</span></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     col1, col2 = st.columns(2)
 
     with col1:
@@ -846,13 +1041,58 @@ if pipeline_state == "1 — Data Generation & Training":
 elif pipeline_state == "2 — Run RCA Inference":
     st.markdown('<div class="stage-badge">🔬 Stage 2 — RCA Inference Pipeline</div>', unsafe_allow_html=True)
 
+    # ── Configuration summary card ──
     st.markdown(f"""
     <div class="glass-card fade-in">
-        <div style="display:flex; gap:2rem; flex-wrap:wrap;">
-            <div><span style="color:#8892b0;">Failure:</span> <b style="color:#ff6b6b;">{failure_type}</b></div>
-            <div><span style="color:#8892b0;">Severity:</span> <b style="color:#ffa502;">{severity}</b></div>
-            <div><span style="color:#8892b0;">Granger Lag:</span> <b style="color:#70a1ff;">{max_granger_lag}</b></div>
-            <div><span style="color:#8892b0;">Expected Root Cause:</span> <b style="color:#7bed9f;">{SCENARIO_ROOT_CAUSES.get(failure_type, 'unknown')}</b></div>
+        <div style="font-weight:600; color:#e2e8f0; margin-bottom:0.8rem; font-size:0.95rem;">🎯 Incident Configuration</div>
+        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:1rem;">
+            <div class="kpi-card">
+                <div class="kpi-value" style="font-size:1rem; color:#ff6b6b;">{failure_type.replace('_', ' ').title()}</div>
+                <div class="kpi-label">Failure Type</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-value" style="color:#ffa502;">{severity}</div>
+                <div class="kpi-label">Severity</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-value" style="color:#70a1ff;">{max_granger_lag}</div>
+                <div class="kpi-label">Granger Lag</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-value" style="font-size:0.85rem; color:#7bed9f;">{SCENARIO_ROOT_CAUSES.get(failure_type, 'unknown')}</div>
+                <div class="kpi-label">Expected Root Cause</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Scenario description ──
+    st.markdown(f"""
+    <div class="glass-card fade-in">
+        <div style="font-weight:600; color:#e2e8f0; margin-bottom:0.5rem; font-size:0.95rem;">📋 Scenario Details</div>
+        <div style="color:#c4cef5; font-size:0.9rem; margin-bottom:1rem;">{SCENARIO_DESCRIPTIONS.get(failure_type, '')}</div>
+        <div style="font-weight:600; color:#e2e8f0; margin-bottom:0.5rem; font-size:0.95rem;">⚡ What Happens When You Click "Run"</div>
+        <div class="step-timeline">
+            <div class="timeline-item">
+                <div class="timeline-num">1</div>
+                <div class="timeline-text"><b>Data Generation</b> — Generate 3 days of synthetic incident data with {failure_type.replace('_', ' ')} failure injected at severity {severity}</div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-num">2</div>
+                <div class="timeline-text"><b>Preprocessing</b> — Normalize incident data using baseline scaler, handle missing values, clip outliers</div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-num">3</div>
+                <div class="timeline-text"><b>LSTM Anomaly Detection</b> — Run trained autoencoder on incident window, flag metrics exceeding 99th-percentile reconstruction error</div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-num">4</div>
+                <div class="timeline-text"><b>Granger Causality</b> — Test pairwise causal relationships between anomalous metrics with max lag={max_granger_lag}</div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-num">5</div>
+                <div class="timeline-text"><b>Root Cause Ranking</b> — Score candidates using causal outflow, temporal priority, anomaly severity, and PageRank</div>
+            </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
