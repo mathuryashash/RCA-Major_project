@@ -210,7 +210,8 @@ for metric in highlight_metrics:
         fig_score = go.Figure()
         fig_score.add_trace(go.Scatter(x=results_df["timestamp"], y=results_df[score_col], mode="lines", name="LSTM Error", fill="tozeroy", line_color="#ff7f0e"))
         
-        thresh = 1.0
+        # Use detector's threshold if available, otherwise default
+        thresh = getattr(detector, 'threshold', 1.0)
         fig_score.add_hline(y=thresh, line_dash="dash", line_color="red", annotation_text=f"AI Threshold ({thresh:.3f})")
         
         fig_score.update_layout(title="LSTM Reconstruction Error (Anomaly Score)", height=300, margin=dict(t=40, b=10))
