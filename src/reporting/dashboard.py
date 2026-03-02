@@ -1044,7 +1044,7 @@ elif pipeline_state == "2 — Run RCA Inference":
         """, unsafe_allow_html=True)
 
         # Feature 6: Confidence Gauge
-        pct = min(top_score * 100, 100)
+        pct = max(0, min(top_score * 100, 100))
         gauge_color = "#48bb78" if pct >= 70 else "#ffa502" if pct >= 40 else "#ff4757"
         st.markdown(f"""
         <div class="confidence-gauge fade-in">
