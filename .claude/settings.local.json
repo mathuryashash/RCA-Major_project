@@ -4,7 +4,9 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "mcp__MCP_DOCKER__fetch",
-      "mcp__MCP_DOCKER__apify-slash-rag-web-browser"
+      "mcp__MCP_DOCKER__apify-slash-rag-web-browser",
+      "Bash(git check-ignore:*)",
+      "Bash(git rm:*)"
     ]
   }
 }
