@@ -18,6 +18,7 @@ import os
 import time
 import json
 import math
+import hashlib
 from datetime import datetime
 
 import streamlit as st
@@ -56,426 +57,12 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Custom CSS — Aesthetic Overhaul
+# Custom CSS — loaded from external file (Issue #15, #21)
 # ─────────────────────────────────────────────────────────────────────────────
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
-/* ── Global ──────────────────────────────────────────────────── */
-html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif;
-}
-
-.main .block-container {
-    padding-top: 2rem;
-    padding-bottom: 2rem;
-}
-
-/* ── Animated gradient header ────────────────────────────────── */
-.hero-title {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    font-size: 2.8rem;
-    font-weight: 800;
-    text-align: center;
-    margin-bottom: 0.2rem;
-    animation: titleGlow 3s ease-in-out infinite alternate;
-}
-
-@keyframes titleGlow {
-    0% { filter: brightness(1); }
-    100% { filter: brightness(1.15); }
-}
-
-.hero-subtitle {
-    text-align: center;
-    color: #a0aec0;
-    font-size: 1.1rem;
-    font-weight: 300;
-    margin-bottom: 1.5rem;
-    letter-spacing: 0.02em;
-}
-
-/* ── Glass card ──────────────────────────────────────────────── */
-.glass-card {
-    background: rgba(30, 33, 48, 0.65);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-    border-radius: 16px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    padding: 1.5rem;
-    margin-bottom: 1rem;
-    transition: transform 0.3s ease, box-shadow 0.3s ease;
-}
-
-.glass-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 32px rgba(102, 126, 234, 0.15);
-}
-
-/* ── KPI metric cards ────────────────────────────────────────── */
-.kpi-card {
-    background: linear-gradient(135deg, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.10));
-    border: 1px solid rgba(102, 126, 234, 0.25);
-    border-radius: 14px;
-    padding: 1.2rem 1.4rem;
-    text-align: center;
-    transition: all 0.3s ease;
-}
-
-.kpi-card:hover {
-    border-color: rgba(102, 126, 234, 0.5);
-    box-shadow: 0 4px 20px rgba(102, 126, 234, 0.2);
-    transform: translateY(-3px);
-}
-
-.kpi-value {
-    font-size: 1.8rem;
-    font-weight: 700;
-    background: linear-gradient(135deg, #667eea, #f093fb);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    margin-bottom: 0.2rem;
-}
-
-.kpi-label {
-    font-size: 0.85rem;
-    color: #8892b0;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    font-weight: 500;
-}
-
-/* ── Pipeline stage badge ────────────────────────────────────── */
-.stage-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    padding: 0.5rem 1.2rem;
-    border-radius: 30px;
-    font-weight: 600;
-    font-size: 0.95rem;
-    margin-bottom: 1rem;
-    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
-}
-
-/* ── Confidence gauge ────────────────────────────────────────── */
-.confidence-gauge {
-    background: rgba(30, 33, 48, 0.6);
-    border-radius: 12px;
-    padding: 1rem 1.5rem;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.gauge-bar {
-    height: 12px;
-    border-radius: 6px;
-    background: linear-gradient(90deg, #667eea, #764ba2, #f093fb);
-    transition: width 1s ease;
-    box-shadow: 0 0 12px rgba(102, 126, 234, 0.4);
-}
-
-.gauge-bg {
-    height: 12px;
-    border-radius: 6px;
-    background: rgba(255, 255, 255, 0.06);
-    overflow: hidden;
-}
-
-/* ── Sidebar styling ─────────────────────────────────────────── */
-section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0f1628 0%, #1a1f3a 50%, #0f1628 100%);
-    border-right: 1px solid rgba(102, 126, 234, 0.15);
-}
-
-section[data-testid="stSidebar"] .stRadio > label {
-    font-weight: 500;
-}
-
-/* ── Scenario info box ───────────────────────────────────────── */
-.scenario-info {
-    background: rgba(102, 126, 234, 0.08);
-    border-left: 3px solid #667eea;
-    border-radius: 0 8px 8px 0;
-    padding: 0.7rem 1rem;
-    font-size: 0.85rem;
-    color: #c4cef5;
-    margin-top: 0.3rem;
-}
-
-/* ── Fade-in animation for sections ──────────────────────────── */
-.fade-in {
-    animation: fadeIn 0.6s ease-out;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(12px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
-
-/* ── Tab styling ─────────────────────────────────────────────── */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 4px;
-}
-
-.stTabs [data-baseweb="tab"] {
-    border-radius: 8px 8px 0 0;
-    padding: 8px 20px;
-    font-weight: 500;
-}
-
-.stTabs [aria-selected="true"] {
-    background: rgba(102, 126, 234, 0.12);
-    border-bottom: 2px solid #667eea;
-}
-
-/* ── Primary button glow ─────────────────────────────────────── */
-.stButton > button[kind="primary"],
-.stButton > button[data-testid="stBaseButton-primary"] {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-    border: none !important;
-    color: white !important;
-    font-weight: 600 !important;
-    border-radius: 10px !important;
-    padding: 0.6rem 2rem !important;
-    transition: all 0.3s ease !important;
-    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3) !important;
-}
-
-.stButton > button[kind="primary"]:hover,
-.stButton > button[data-testid="stBaseButton-primary"]:hover {
-    transform: translateY(-2px) !important;
-    box-shadow: 0 6px 25px rgba(102, 126, 234, 0.45) !important;
-}
-
-/* ── Divider ─────────────────────────────────────────────────── */
-.styled-divider {
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.3), transparent);
-    border: none;
-    margin: 1.5rem 0;
-}
-
-/* ── About section ───────────────────────────────────────────── */
-.about-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 1rem;
-    margin-top: 1rem;
-}
-
-.about-item {
-    background: rgba(30, 33, 48, 0.5);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 12px;
-    padding: 1rem;
-    text-align: center;
-    transition: border-color 0.3s ease;
-}
-
-.about-item:hover {
-    border-color: rgba(102, 126, 234, 0.3);
-}
-
-.about-icon {
-    font-size: 2rem;
-    margin-bottom: 0.5rem;
-}
-
-.about-title {
-    font-weight: 600;
-    color: #e2e8f0;
-    margin-bottom: 0.3rem;
-    font-size: 0.95rem;
-}
-
-.about-desc {
-    font-size: 0.8rem;
-    color: #718096;
-    line-height: 1.4;
-}
-
-/* ── Footer ──────────────────────────────────────────────────── */
-.footer-text {
-    text-align: center;
-    color: #4a5568;
-    font-size: 0.82rem;
-    padding-top: 1rem;
-    letter-spacing: 0.03em;
-}
-
-/* ── Accuracy table styling ──────────────────────────────────── */
-.accuracy-highlight {
-    background: linear-gradient(135deg, rgba(72, 187, 120, 0.12), rgba(56, 178, 172, 0.08));
-    border: 1px solid rgba(72, 187, 120, 0.2);
-    border-radius: 12px;
-    padding: 1.2rem;
-    text-align: center;
-}
-
-.accuracy-number {
-    font-size: 2.2rem;
-    font-weight: 700;
-    background: linear-gradient(135deg, #48bb78, #38b2ac);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
-
-.accuracy-label {
-    font-size: 0.85rem;
-    color: #68d391;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    font-weight: 500;
-}
-
-/* ── Pipeline flow diagram ───────────────────────────────────── */
-.pipeline-flow {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0;
-    margin: 1.5rem 0;
-    flex-wrap: wrap;
-}
-
-.pipeline-step {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    background: rgba(30, 33, 48, 0.6);
-    border: 1px solid rgba(102, 126, 234, 0.15);
-    border-radius: 12px;
-    padding: 1rem 1.2rem;
-    min-width: 120px;
-    transition: all 0.4s ease;
-    position: relative;
-}
-
-.pipeline-step:hover {
-    border-color: rgba(102, 126, 234, 0.5);
-    transform: translateY(-4px);
-    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.2);
-}
-
-.pipeline-step .step-icon {
-    font-size: 1.8rem;
-    margin-bottom: 0.4rem;
-}
-
-.pipeline-step .step-label {
-    font-size: 0.75rem;
-    color: #a0aec0;
-    text-align: center;
-    font-weight: 500;
-    line-height: 1.3;
-}
-
-.pipeline-arrow {
-    font-size: 1.2rem;
-    color: rgba(102, 126, 234, 0.5);
-    margin: 0 0.3rem;
-    animation: arrowPulse 2s ease-in-out infinite;
-}
-
-@keyframes arrowPulse {
-    0%, 100% { opacity: 0.4; transform: translateX(0); }
-    50% { opacity: 1; transform: translateX(3px); }
-}
-
-/* ── Metric preview grid ─────────────────────────────────────── */
-.metric-grid {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 0.6rem;
-    margin: 1rem 0;
-}
-
-.metric-chip {
-    background: rgba(30, 33, 48, 0.5);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 10px;
-    padding: 0.6rem 0.8rem;
-    text-align: center;
-    transition: all 0.3s ease;
-    cursor: default;
-}
-
-.metric-chip:hover {
-    border-color: rgba(102, 126, 234, 0.4);
-    background: rgba(102, 126, 234, 0.08);
-    transform: scale(1.05);
-}
-
-.metric-chip .chip-icon {
-    font-size: 1.3rem;
-    display: block;
-    margin-bottom: 0.2rem;
-}
-
-.metric-chip .chip-name {
-    font-size: 0.7rem;
-    color: #8892b0;
-    font-weight: 500;
-}
-
-/* ── What happens section ────────────────────────────────────── */
-.step-timeline {
-    display: flex;
-    flex-direction: column;
-    gap: 0.8rem;
-    margin: 1rem 0;
-}
-
-.timeline-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.8rem;
-    padding: 0.8rem 1rem;
-    background: rgba(30, 33, 48, 0.4);
-    border-radius: 10px;
-    border-left: 3px solid rgba(102, 126, 234, 0.3);
-    transition: all 0.3s ease;
-}
-
-.timeline-item:hover {
-    background: rgba(102, 126, 234, 0.06);
-    border-left-color: #667eea;
-}
-
-.timeline-num {
-    background: linear-gradient(135deg, #667eea, #764ba2);
-    color: white;
-    width: 26px;
-    height: 26px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.75rem;
-    font-weight: 700;
-    flex-shrink: 0;
-}
-
-.timeline-text {
-    font-size: 0.85rem;
-    color: #c4cef5;
-    line-height: 1.4;
-}
-
-.timeline-text b {
-    color: #e2e8f0;
-}
-</style>
-""", unsafe_allow_html=True)
+_css_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "style.css")
+with open(_css_path) as _f:
+    st.markdown(f"<style>{_f.read()}</style>", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -497,7 +84,12 @@ st.markdown("""
 # Feature 1: Welcome / About Section
 # ─────────────────────────────────────────────────────────────────────────────
 
-with st.expander("ℹ️  About This System", expanded=False):
+# Issue #24: About expander open on first visit
+_first_visit = "_about_seen" not in st.session_state
+if _first_visit:
+    st.session_state._about_seen = True
+
+with st.expander("ℹ️  About This System", expanded=_first_visit):
     st.markdown("""
 <div class="about-grid">
     <div class="about-item">
@@ -555,7 +147,7 @@ SCENARIO_ROOT_CAUSES = {
 st.sidebar.markdown("""
 <div style="text-align:center; margin-bottom:1rem;">
     <span style="font-size:1.5rem;">⚙️</span>
-    <span style="font-size:1.2rem; font-weight:700; 
+    <span class="sidebar-heading" style="font-size:1.2rem; font-weight:700; 
           background: linear-gradient(135deg, #667eea, #f093fb);
           -webkit-background-clip: text; -webkit-text-fill-color: transparent;
           background-clip: text;">Control Panel</span>
@@ -569,50 +161,59 @@ pipeline_state = st.sidebar.radio(
     help="Stage 1 generates synthetic data and trains the model. Stage 2 runs the full RCA pipeline on a simulated incident.",
 )
 
+# Issue #11: Persistent "Model Trained" indicator
+if st.session_state.get("model_trained"):
+    st.sidebar.success("✅ Model Trained — Ready for Stage 2")
+
 st.sidebar.markdown('<div class="styled-divider"></div>', unsafe_allow_html=True)
 
-# Training parameters with tooltips (Feature 3)
-baseline_days = st.sidebar.slider(
-    "Baseline Training Days", 10, 60, 30,
-    help="Number of days of normal operational data to generate. More data = better baseline but slower training. 30 days is a good default."
-)
-training_epochs = st.sidebar.slider(
-    "LSTM Training Epochs", 1, 30, 5,
-    help="Training iterations over the full dataset. More epochs = lower reconstruction error but risk of overfitting. 5-10 is optimal."
-)
-window_size = st.sidebar.slider(
-    "LSTM Window Size (timesteps)", 6, 60, 12,
-    help="Number of consecutive timesteps the model looks at in each sliding window. Larger windows capture longer temporal patterns but need more data."
-)
-seed = st.sidebar.number_input(
-    "Random Seed", value=42, step=1,
-    help="Controls random number generation for reproducibility. Same seed = same synthetic data every time.",
-)
-
-# Failure injection parameters
-st.sidebar.markdown('<div class="styled-divider"></div>', unsafe_allow_html=True)
-st.sidebar.markdown("**🎯 Failure Injection**")
-
-failure_type = st.sidebar.selectbox(
-    "Failure Scenario",
-    list(SCENARIO_DESCRIPTIONS.keys()),
-    help="Choose which type of infrastructure failure to simulate. Each scenario has a known root cause for validation.",
-)
-
-# Feature 4: Show scenario description
-st.sidebar.markdown(
-    f'<div class="scenario-info">{SCENARIO_DESCRIPTIONS.get(failure_type, "")}</div>',
-    unsafe_allow_html=True,
-)
-
-severity = st.sidebar.slider(
-    "Severity (0.1 – 1.0)", 0.1, 1.0, 0.8, 0.05,
-    help="Failure intensity multiplier. Higher severity = more pronounced anomalies and clearer causal chains. 0.8 is a good starting point.",
-)
-max_granger_lag = st.sidebar.slider(
-    "Granger Max Lag", 2, 10, 5,
-    help="Maximum number of time lags tested in Granger causality. Higher values detect longer-range causal effects but increase computation time.",
-)
+# Issue #10: Show only stage-relevant controls
+if pipeline_state == "1 — Data Generation & Training":
+    st.sidebar.markdown("**🧪 Training Parameters**")
+    baseline_days = st.sidebar.slider(
+        "Baseline Training Days", 10, 60, 30,
+        help="Number of days of normal operational data to generate. More data = better baseline but slower training. 30 days is a good default."
+    )
+    training_epochs = st.sidebar.slider(
+        "LSTM Training Epochs", 1, 30, 5,
+        help="Training iterations over the full dataset. More epochs = lower reconstruction error but risk of overfitting. 5-10 is optimal."
+    )
+    window_size = st.sidebar.slider(
+        "LSTM Window Size (timesteps)", 6, 60, 12,
+        help="Number of consecutive timesteps the model looks at in each sliding window. Larger windows capture longer temporal patterns but need more data."
+    )
+    seed = st.sidebar.number_input(
+        "Random Seed", value=42, step=1,
+        help="Controls random number generation for reproducibility. Same seed = same synthetic data every time.",
+    )
+    # Defaults for Stage 2 params (needed for function signatures)
+    failure_type = "database_slow_query"
+    severity = 0.8
+    max_granger_lag = 5
+else:
+    st.sidebar.markdown("**🎯 Failure Injection**")
+    failure_type = st.sidebar.selectbox(
+        "Failure Scenario",
+        list(SCENARIO_DESCRIPTIONS.keys()),
+        help="Choose which type of infrastructure failure to simulate. Each scenario has a known root cause for validation.",
+    )
+    st.sidebar.markdown(
+        f'<div class="scenario-info">{SCENARIO_DESCRIPTIONS.get(failure_type, "")}</div>',
+        unsafe_allow_html=True,
+    )
+    severity = st.sidebar.slider(
+        "Severity (0.1 – 1.0)", 0.1, 1.0, 0.8, 0.05,
+        help="Failure intensity multiplier. Higher severity = more pronounced anomalies and clearer causal chains. 0.8 is a good starting point.",
+    )
+    max_granger_lag = st.sidebar.slider(
+        "Granger Max Lag", 2, 10, 5,
+        help="Maximum number of time lags tested in Granger causality. Higher values detect longer-range causal effects but increase computation time.",
+    )
+    # Defaults for Stage 1 params (needed for function signatures)
+    baseline_days = 30
+    training_epochs = 5
+    window_size = 12
+    seed = 42
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -639,9 +240,9 @@ def get_trained_model(normal_data_hash: int, _normal_data, n_features: int,
     return detector, feat_cols, scaler
 
 
-def _df_hash(df) -> int:
-    """Cheap hash for a DataFrame to use as cache key."""
-    return hash(df.shape) ^ hash(tuple(df.columns.tolist()))
+def _df_hash(df) -> str:
+    """Content-based hash for a DataFrame to use as cache key (Issue #15)."""
+    return hashlib.md5(pd.util.hash_pandas_object(df).values.tobytes()).hexdigest()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -667,13 +268,19 @@ def draw_causal_graph(G: nx.DiGraph, root_cause_metric: str) -> go.Figure:
         x1, y1 = pos[v]
         lag = d.get("lag", "?")
 
+        # Issue #11: Encode edge strength visually
+        strength = d.get("strength", 0.0)
+        edge_width = 1.0 + min(strength * 5.0, 10.0)
+        opacity = min(0.3 + strength, 1.0)
+        edge_color = f"rgba(102, 126, 234, {opacity})"
+
         # Edge line
         fig.add_trace(go.Scatter(
             x=[x0, x1], y=[y0, y1],
             mode="lines",
-            line=dict(width=1.5, color="rgba(150, 160, 200, 0.45)"),
+            line=dict(width=edge_width, color=edge_color),
             hoverinfo="text",
-            hovertext=f"{u} → {v} (lag={lag})",
+            hovertext=f"{u} → {v} (lag={lag}, str={strength:.3f})",
             showlegend=False,
         ))
 
@@ -682,8 +289,8 @@ def draw_causal_graph(G: nx.DiGraph, root_cause_metric: str) -> go.Figure:
             x=x1, y=y1, ax=x0, ay=y0,
             xref="x", yref="y", axref="x", ayref="y",
             showarrow=True,
-            arrowhead=3, arrowsize=1.5, arrowwidth=1.5,
-            arrowcolor="rgba(150, 160, 200, 0.6)",
+            arrowhead=3, arrowsize=1.2, arrowwidth=edge_width,
+            arrowcolor=edge_color,
         )
 
         # Edge label (lag)
@@ -898,7 +505,7 @@ if pipeline_state == "1 — Data Generation & Training":
 
     # Feature 2: KPI Preview Cards
     st.markdown(f"""
-    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:1rem; margin-bottom:1.5rem;" class="fade-in">
+    <div class="kpi-grid fade-in">
         <div class="kpi-card">
             <div class="kpi-value">{baseline_days * 288:,}</div>
             <div class="kpi-label">Expected Samples</div>
@@ -982,7 +589,8 @@ if pipeline_state == "1 — Data Generation & Training":
             f"Will generate **{baseline_days} days** of synthetic normal metrics "
             f"and train an LSTM Autoencoder for **{training_epochs} epoch(s)**."
         )
-        train_button = st.button("🚀 Generate Data & Train Model", type="primary")
+        # Issue #26: Remove emojis from buttons
+        train_button = st.button("Generate Data & Train Model", type="primary")
 
     if train_button:
         with st.spinner(f"Generating {baseline_days} days of normal metrics …"):
@@ -1032,6 +640,8 @@ if pipeline_state == "1 — Data Generation & Training":
                 "Thresholds calibrated using the 99th-percentile reconstruction "
                 "error on the validation split. Proceed to **Stage 2** to run RCA."
             )
+            # Mark model as trained for Stage 2 guard
+            st.session_state.model_trained = True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1040,6 +650,14 @@ if pipeline_state == "1 — Data Generation & Training":
 
 elif pipeline_state == "2 — Run RCA Inference":
     st.markdown('<div class="stage-badge">🔬 Stage 2 — RCA Inference Pipeline</div>', unsafe_allow_html=True)
+
+    # Issue #3: Prevent Stage 2 if Stage 1 is not run
+    if not st.session_state.get("model_trained"):
+        st.warning("⚠️  Please run Stage 1 (Data Generation & Training) first to train the baseline model.")
+        st.stop()
+
+    # Issue #12, #26: Move Run button above configuration cards and remove emoji
+    run_button = st.button("Simulate Incident & Run Full RCA", type="primary")
 
     # ── Configuration summary card ──
     st.markdown(f"""
@@ -1097,7 +715,6 @@ elif pipeline_state == "2 — Run RCA Inference":
     </div>
     """, unsafe_allow_html=True)
 
-    run_button = st.button("▶ Simulate Incident & Run Full RCA", type="primary")
 
     if run_button:
         # ── Step 1: Generate training + incident data ─────────────────────────
@@ -1263,7 +880,7 @@ elif pipeline_state == "2 — Run RCA Inference":
 
         # KPI Row
         st.markdown(f"""
-        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:1rem; margin-bottom:1rem;" class="fade-in">
+        <div class="kpi-grid fade-in" style="margin-bottom:1rem;">
             <div class="kpi-card">
                 <div class="kpi-value" style="font-size:1.3rem;">{top_metric}</div>
                 <div class="kpi-label">Primary Root Cause</div>
@@ -1283,17 +900,17 @@ elif pipeline_state == "2 — Run RCA Inference":
         </div>
         """, unsafe_allow_html=True)
 
-        # Feature 6: Confidence Gauge
+        # Issue #6: Include confidence level label alongside percentage and add ARIA roles
         pct = max(0, min(top_score * 100, 100))
         gauge_color = "#48bb78" if pct >= 70 else "#ffa502" if pct >= 40 else "#ff4757"
         st.markdown(f"""
-        <div class="confidence-gauge fade-in">
+        <div class="confidence-gauge fade-in" role="meter" aria-valuenow="{pct:.1f}" aria-valuemin="0" aria-valuemax="100" aria-label="Root Cause Confidence: {pct:.1f}% ({top_conf})">
             <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
-                <span style="color:#8892b0; font-size:0.85rem; font-weight:500;">Root Cause Confidence</span>
+                <span style="color:#8892b0; font-size:0.85rem; font-weight:500;">Root Cause Confidence ({top_conf})</span>
                 <span style="color:{gauge_color}; font-weight:700; font-size:0.95rem;">{pct:.1f}%</span>
             </div>
             <div class="gauge-bg">
-                <div class="gauge-bar" style="width:{pct}%; background: linear-gradient(90deg, #667eea, {gauge_color});"></div>
+                <div class="gauge-bar" style="width:{pct}%; background: linear-gradient(90deg, #667eea, {gauge_color});" aria-hidden="true"></div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1301,13 +918,12 @@ elif pipeline_state == "2 — Run RCA Inference":
         st.markdown('<div class="styled-divider"></div>', unsafe_allow_html=True)
 
         # ── Tab layout ────────────────────────────────────────────────────────
-        tab_rc, tab_graph, tab_timeline, tab_report, tab_json, tab_accuracy = st.tabs([
+        tab_rc, tab_graph, tab_timeline, tab_report, tab_json = st.tabs([
             "🏆 Root Causes",
             "🕸️ Causal Graph",
             "📊 Anomaly Timeline",
             "📄 MD Report",
             "🗂️ JSON Report",
-            "📈 Accuracy Benchmark",
         ])
 
         with tab_rc:
@@ -1315,7 +931,12 @@ elif pipeline_state == "2 — Run RCA Inference":
             if root_causes:
                 rows = []
                 for rc in root_causes:
-                    sb = rc.get("scores_breakdown", {})
+                    # Issue #30: Indicate if downstream effects are truncated
+                    downstream_list = rc.get("downstream_effects", [])
+                    downstream_str = ", ".join(downstream_list[:3])
+                    if len(downstream_list) > 3:
+                        downstream_str += f" (+{len(downstream_list) - 3} more)"
+                    
                     rows.append({
                         "Rank":            rc["rank"],
                         "Metric":          rc["metric"],
@@ -1324,7 +945,7 @@ elif pipeline_state == "2 — Run RCA Inference":
                         "Causal Outflow":  f"{sb.get('causal_outflow', 0):.3f}",
                         "Temporal Prio":   f"{sb.get('temporal_priority', 0):.3f}",
                         "Severity":        f"{sb.get('anomaly_severity', 0):.3f}",
-                        "Downstream":      ", ".join(rc.get("downstream_effects", [])[:3]) or "—",
+                        "Downstream":      downstream_str or "—",
                     })
                 df_rc = pd.DataFrame(rows)
                 st.dataframe(df_rc, use_container_width=True, hide_index=True)
@@ -1389,18 +1010,20 @@ elif pipeline_state == "2 — Run RCA Inference":
                 ts_df = incident_scaled.set_index("timestamp")[viz_cols].copy()
 
                 fig_ts = go.Figure()
-                for col in viz_cols:
+                for i, col in enumerate(viz_cols):
                     fig_ts.add_trace(go.Scatter(
                         x=ts_df.index, y=ts_df[col],
                         mode="lines", name=col,
                     ))
                     if col in anomaly_times:
                         x_val = anomaly_times[col].timestamp() * 1000
+                        # Issue #13: Alternate positions to avoid collision
+                        pos = "top left" if i % 2 == 0 else "bottom right"
                         fig_ts.add_vline(
                             x=x_val,
                             line_dash="dash", line_color="red",
                             annotation_text=f"{col} anomaly",
-                            annotation_position="top left",
+                            annotation_position=pos,
                         )
 
                 fig_ts.update_layout(
@@ -1427,6 +1050,7 @@ elif pipeline_state == "2 — Run RCA Inference":
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
                     font=dict(family="Inter"),
+                    xaxis=dict(tickangle=-45), # Issue #14: Prevent x-axis label truncation
                 )
                 st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -1493,89 +1117,96 @@ elif pipeline_state == "2 — Run RCA Inference":
                 mime="application/json",
             )
 
-        # ── Feature 8: Accuracy Benchmark Tab ─────────────────────────────────
-        with tab_accuracy:
-            st.subheader("📈 Accuracy Benchmark — All 6 Scenarios")
-            st.markdown(
-                "Automatically runs the RCA pipeline across all failure scenarios "
-                "to measure Top-1 and Top-3 identification accuracy."
-            )
+# ─────────────────────────────────────────────────────────────────────────────
+# Standalone Accuracy Benchmark (Issue #13: Decoupled from tabs)
+# ─────────────────────────────────────────────────────────────────────────────
 
-            run_benchmark = st.button("🧪 Run Full Benchmark", type="primary", key="benchmark_btn")
+# Only allow benchmark if a model has been trained (uses its parameters)
+if st.session_state.get("model_trained"):
+    with st.expander("📈 Accuracy Benchmark — All Scenarios", expanded=False):
+        st.markdown(
+            "Automatically runs the RCA pipeline across all failure scenarios "
+            "to measure Top-1 and Top-3 identification accuracy."
+        )
 
-            if run_benchmark:
-                all_scenarios = list(SCENARIO_DESCRIPTIONS.keys())
-                benchmark_results = []
+        run_benchmark = st.button("Run Full Benchmark", type="primary", key="benchmark_btn")
 
-                bench_progress = st.progress(0, "Running benchmark …")
+        if run_benchmark:
+            all_scenarios = list(SCENARIO_DESCRIPTIONS.keys())
+            benchmark_results = []
 
-                for i, scenario in enumerate(all_scenarios):
-                    bench_progress.progress(
-                        int((i / len(all_scenarios)) * 100),
-                        f"Running scenario {i+1}/{len(all_scenarios)}: {scenario} …"
+            # Ensure we have normal_df and feat_cols to use
+            normal_df = get_training_data(baseline_days, int(seed))
+            feat_cols = [c for c in normal_df.columns if c != "timestamp"]
+
+            bench_progress = st.progress(0, "Running benchmark …")
+
+            for i, scenario in enumerate(all_scenarios):
+                bench_progress.progress(
+                    int((i / len(all_scenarios)) * 100),
+                    f"Running scenario {i+1}/{len(all_scenarios)}: {scenario} …"
+                )
+                try:
+                    result = run_single_scenario(
+                        normal_df, feat_cols, scenario,
+                        severity, window_size, training_epochs,
+                        int(seed), max_granger_lag,
                     )
-                    try:
-                        result = run_single_scenario(
-                            normal_df, feat_cols, scenario,
-                            severity, window_size, training_epochs,
-                            int(seed), max_granger_lag,
-                        )
-                        benchmark_results.append(result)
-                    except Exception as e:
-                        benchmark_results.append({
-                            "scenario": scenario,
-                            "ground_truth": SCENARIO_ROOT_CAUSES.get(scenario, "?"),
-                            "top1": f"Error: {str(e)[:30]}",
-                            "top3": [],
-                            "top1_match": False,
-                            "top3_match": False,
-                            "score": 0.0,
-                        })
-
-                bench_progress.progress(100, "✅ Benchmark complete!")
-
-                # Display results
-                bench_rows = []
-                for r in benchmark_results:
-                    bench_rows.append({
-                        "Scenario":          r["scenario"],
-                        "Ground Truth":      r["ground_truth"],
-                        "Top-1 Prediction":  r["top1"],
-                        "Score":             f"{r['score']:.4f}" if r['score'] else "—",
-                        "Top-1 Match":       "✅" if r["top1_match"] else "❌",
-                        "Top-3 Match":       "✅" if r["top3_match"] else "❌",
+                    benchmark_results.append(result)
+                except Exception as e:
+                    benchmark_results.append({
+                        "scenario": scenario,
+                        "ground_truth": SCENARIO_ROOT_CAUSES.get(scenario, "?"),
+                        "top1": f"Error: {str(e)[:30]}",
+                        "top3": [],
+                        "top1_match": False,
+                        "top3_match": False,
+                        "score": 0.0,
                     })
 
-                bench_df = pd.DataFrame(bench_rows)
-                st.dataframe(bench_df, use_container_width=True, hide_index=True)
+            bench_progress.progress(100, "✅ Benchmark complete!")
 
-                # Accuracy summary
-                top1_acc = sum(1 for r in benchmark_results if r["top1_match"]) / len(benchmark_results) * 100
-                top3_acc = sum(1 for r in benchmark_results if r["top3_match"]) / len(benchmark_results) * 100
+            # Display results
+            bench_rows = []
+            for r in benchmark_results:
+                bench_rows.append({
+                    "Scenario":          r["scenario"],
+                    "Ground Truth":      r["ground_truth"],
+                    "Top-1 Prediction":  r["top1"],
+                    "Score":             f"{r['score']:.4f}" if r['score'] else "—",
+                    "Top-1 Match":       "✅" if r["top1_match"] else "❌",
+                    "Top-3 Match":       "✅" if r["top3_match"] else "❌",
+                })
 
-                st.markdown(f"""
-                <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:1.5rem; margin-top:1rem;" class="fade-in">
-                    <div class="accuracy-highlight">
-                        <div class="accuracy-number">{top1_acc:.0f}%</div>
-                        <div class="accuracy-label">Top-1 Accuracy</div>
-                    </div>
-                    <div class="accuracy-highlight">
-                        <div class="accuracy-number">{top3_acc:.0f}%</div>
-                        <div class="accuracy-label">Top-3 Accuracy</div>
-                    </div>
+            bench_df = pd.DataFrame(bench_rows)
+            st.dataframe(bench_df, use_container_width=True, hide_index=True)
+
+            # Accuracy summary
+            top1_acc = sum(1 for r in benchmark_results if r["top1_match"]) / len(benchmark_results) * 100
+            top3_acc = sum(1 for r in benchmark_results if r["top3_match"]) / len(benchmark_results) * 100
+
+            st.markdown(f"""
+            <div class="kpi-grid fade-in" style="margin-top:1rem;">
+                <div class="accuracy-highlight">
+                    <div class="accuracy-number">{top1_acc:.0f}%</div>
+                    <div class="accuracy-label">Top-1 Accuracy</div>
                 </div>
-                """, unsafe_allow_html=True)
+                <div class="accuracy-highlight">
+                    <div class="accuracy-number">{top3_acc:.0f}%</div>
+                    <div class="accuracy-label">Top-3 Accuracy</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
-                # Download benchmark
-                bench_csv = bench_df.to_csv(index=False)
-                st.download_button(
-                    label="⬇️ Download Benchmark Results",
-                    data=bench_csv,
-                    file_name="rca_benchmark_results.csv",
-                    mime="text/csv",
-                    key="bench_download",
-                )
-
+            # Download benchmark
+            bench_csv = bench_df.to_csv(index=False)
+            st.download_button(
+                label="⬇️ Download Benchmark Results",
+                data=bench_csv,
+                file_name="rca_benchmark_results.csv",
+                mime="text/csv",
+                key="bench_download",
+            )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Footer
