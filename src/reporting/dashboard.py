@@ -937,6 +937,8 @@ elif pipeline_state == "2 — Run RCA Inference":
                     if len(downstream_list) > 3:
                         downstream_str += f" (+{len(downstream_list) - 3} more)"
                     
+                    sb = rc.get("score_breakdown", {})
+                    
                     rows.append({
                         "Rank":            rc["rank"],
                         "Metric":          rc["metric"],
