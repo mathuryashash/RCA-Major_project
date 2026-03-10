@@ -11,7 +11,7 @@ This document serves as a comprehensive overview of the AI-Powered Root Cause An
 **What we did:**
 1. **Defined the Core Framework:** We established a multi-step pipeline consisting of Data Preprocessing, Anomaly Detection, Causal Inference, and Root Cause Ranking.
 2. **Key Technologies:** Selected `Python` for data processing, `PyTorch` for deep learning (LSTMs), `NetworkX` for graph algorithms, `statsmodels` for statistical causality, and `Streamlit` for the interactive dashboard.
-3. **Drafted the PRD:** Maintained an agile Product Requirements Document (`PRD.md`) outlining six primary phases of development.
+3. **Drafted the PRD:** Maintained an agile Product Requirements Document (`PRD.md`) outlining seven primary phases of development.
 
 ---
 

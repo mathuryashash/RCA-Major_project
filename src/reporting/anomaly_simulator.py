@@ -179,7 +179,9 @@ scaled_test_df.insert(0, "timestamp", test_df["timestamp"].values)
 results_df = detector.detect(scaled_test_df, all_feats)
 # The detector returns a df with an index offset by window_size-1. 
 # We pull the correct timestamps using this index.
-results_df["timestamp"] = test_df.loc[results_df.index, "timestamp"]
+valid_idx = results_df.index.intersection(test_df.index)
+results_df = results_df.loc[valid_idx]
+results_df["timestamp"] = test_df.loc[valid_idx, "timestamp"]
 
 st.subheader(f"Analyzing Pattern: `{selected_name}`")
 
