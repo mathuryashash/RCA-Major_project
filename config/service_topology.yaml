@@ -1,0 +1,62 @@
+# Service Topology — structural prior for KHBN Bayesian Network
+# Defines known service dependencies (parent → children)
+
+services:
+  - name: load_balancer
+    type: infrastructure
+    depends_on: []
+
+  - name: web_server
+    type: application
+    depends_on: [load_balancer]
+
+  - name: app_server
+    type: application
+    depends_on: [web_server]
+
+  - name: database
+    type: database
+    depends_on: [app_server]
+
+  - name: cache
+    type: infrastructure
+    depends_on: [app_server]
+
+  - name: message_queue
+    type: infrastructure
+    depends_on: [app_server]
+
+  - name: storage
+    type: infrastructure
+    depends_on: [app_server]
+
+  - name: dns
+    type: infrastructure
+    depends_on: []
+
+  - name: network
+    type: infrastructure
+    depends_on: []
+
+  - name: os_kernel
+    type: system
+    depends_on: []
+
+# Mapping from log source labels to service names
+source_to_service:
+  application: app_server
+  database: database
+  system: os_kernel
+
+# Mapping from metric prefixes to service names
+metric_to_service:
+  cpu_: os_kernel
+  memory_: os_kernel
+  disk_: storage
+  network_: network
+  query_latency: database
+  connections: database
+  cache_hit: cache
+  http_: web_server
+  request_: app_server
+  queue_: message_queue

@@ -1,0 +1,30 @@
+# Audit Report: {{ incident_id }}
+
+**Generated:** {{ generated_at }}
+**Total Actions Logged:** {{ actions | length }}
+
+---
+
+## Remediation Actions Taken
+
+| # | Timestamp | Action | Command | Executor | Outcome |
+|---|-----------|--------|---------|----------|---------|
+{% for entry in actions %}
+| {{ loop.index }} | {{ entry.timestamp }} | {{ entry.action_type }} | `{{ entry.command_executed }}` | {{ entry.executor }} | {{ entry.outcome }} |
+{% endfor %}
+
+{% if actions %}
+## State Transitions
+
+{% for entry in actions %}
+{% if entry.before_state or entry.after_state %}
+### {{ entry.action_type }} ({{ entry.timestamp }})
+- **Before:** {{ entry.before_state or "N/A" }}
+- **After:** {{ entry.after_state or "N/A" }}
+{% endif %}
+{% endfor %}
+{% endif %}
+
+---
+
+*Immutable audit log — entries cannot be modified or deleted.*

@@ -1,0 +1,132 @@
+# safety_rules.yaml
+# Deterministic safety classification rules for the Remediation Engine.
+# No ML model is used for safety decisions — this ensures 100% auditability (NFR-22).
+#
+# Each action_type maps to a tier based on:
+#   - reversibility: can the action be undone?
+#   - blast_radius: single-service vs multi-service
+#   - data_risk: any risk of data loss?
+#   - automation_safe: can we safely execute without human judgment?
+#
+# Tier 1: SAFE - Auto-Execute (reversible, single-service, no data loss)
+# Tier 2: GUIDED - Walkthrough (irreversible OR multi-service OR needs env knowledge)
+# Tier 3: ADVISORY - Inform Only (architectural change, code fix, org-level process)
+
+confidence_gate:
+  # Minimum root cause confidence to propose/execute any remediation (FR-31)
+  min_threshold: 0.70
+  # Below this, remediation is advisory-only and requires human confirmation
+  low_confidence_behavior: advisory_only
+
+tier1_auto_execute:
+  # Actions matching these patterns are classified as Tier 1
+  # Must satisfy ALL conditions: reversible=true, blast_radius=single, data_risk=none
+  action_patterns:
+    - pattern: "flush_*_cache"
+      reversible: true
+      blast_radius: single_service
+      data_risk: none
+    - pattern: "restart_*"
+      reversible: true
+      blast_radius: single_service
+      data_risk: none
+    - pattern: "rolling_restart"
+      reversible: true
+      blast_radius: single_service
+      data_risk: none
+    - pattern: "force_gc"
+      reversible: true
+      blast_radius: single_service
+      data_risk: none
+    - pattern: "kill_*_job"
+      reversible: false
+      blast_radius: single_service
+      data_risk: none
+      # Exception: kill is not reversible but is safe because the job can be restarted
+      override_reason: "Job can be rescheduled; immediate threat mitigation takes priority"
+    - pattern: "activate_circuit_breaker"
+      reversible: true
+      blast_radius: single_service
+      data_risk: none
+    - pattern: "set_emergency_ttl"
+      reversible: true
+      blast_radius: single_service
+      data_risk: none
+    - pattern: "flush_dns_cache"
+      reversible: true
+      blast_radius: single_service
+      data_risk: none
+
+  # Auto-execution parameters
+  countdown_seconds: 30  # Dashboard shows 30s countdown with Cancel button (FR-32)
+  max_concurrent_actions: 3
+  require_audit_log: true  # Every action logged to remediation_actions table (FR-30)
+
+tier2_guided:
+  # Actions matching these patterns are classified as Tier 2
+  # At least one: irreversible=true OR blast_radius=multi_service OR needs_env_knowledge=true
+  action_patterns:
+    - pattern: "rollback_deployment"
+      irreversible: true
+      blast_radius: multi_service
+    - pattern: "rollback_migration"
+      irreversible: false
+      blast_radius: single_service
+      needs_env_knowledge: true
+    - pattern: "modify_db_*"
+      irreversible: true
+      blast_radius: single_service
+    - pattern: "resize_connection_pool"
+      irreversible: false
+      blast_radius: multi_service
+    - pattern: "halt_trading"
+      irreversible: false
+      blast_radius: multi_service
+      needs_env_knowledge: true
+    - pattern: "fix_redis_cluster"
+      irreversible: true
+      blast_radius: multi_service
+    - pattern: "reconcile_*"
+      irreversible: true
+      blast_radius: multi_service
+    - pattern: "update_load_balancer"
+      irreversible: false
+      blast_radius: multi_service
+    - pattern: "reschedule_job"
+      irreversible: false
+      blast_radius: single_service
+      needs_env_knowledge: true
+
+  # Walkthrough display parameters
+  require_step_confirmation: true  # Engineer must confirm each step before next (FR-32)
+  show_rollback_for_each_step: true
+
+tier3_advisory:
+  # Actions matching these patterns are always Tier 3
+  action_patterns:
+    - pattern: "code_fix_*"
+      requires: architectural_change
+    - pattern: "redesign_*"
+      requires: architectural_change
+    - pattern: "implement_*"
+      requires: process_change
+    - pattern: "add_*_test"
+      requires: process_change
+    - pattern: "refactor_*"
+      requires: code_change
+
+  # Advisory display parameters
+  show_effort_estimate: true
+  show_suggested_owner: true
+  show_priority_score: true
+
+# Escalation rules
+escalation:
+  # If a Tier 1 action fails, escalate to Tier 2
+  tier1_failure: escalate_to_tier2
+  # If a Tier 2 walkthrough fails at any step, pause and alert
+  tier2_failure: pause_and_alert
+  # Maximum retries for Tier 1 auto-execution
+  tier1_max_retries: 1
+  # Timeout for Tier 1 auto-execution
+  tier1_timeout_seconds: 60

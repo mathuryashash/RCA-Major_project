@@ -1,0 +1,172 @@
+# docker-compose.yml — Automated RCA System
+#
+# One-command deployment: docker compose up --build
+#
+# Services:
+#   - backend:          FastAPI API server (port 8000)
+#   - frontend:         React dashboard via Nginx (port 3000)
+#   - generate:         Init container — generates synthetic failure logs on first run
+#   - metric-generator: Init container — generates synthetic metrics on first run
+#   - timescaledb:      TimescaleDB for metric storage (port 5432)
+#   - redis:            Redis for streaming (port 6379)
+#   - prometheus:        Prometheus for metric scraping (port 9090)
+
+services:
+  # -------------------------------------------------------------------
+  # Init: Generate synthetic failure logs (runs once, then exits)
+  # -------------------------------------------------------------------
+  generate:
+    build: .
+    command: >
+      python scripts/generate_failures.py
+        --scenario all
+        --count 20
+        --seed 42
+        --output-dir /app/data/logs
+        --labels-dir /app/data/labels
+    volumes:
+      - app-data:/app/data
+    restart: "no"
+
+  # -------------------------------------------------------------------
+  # Init: Generate synthetic metrics (runs once, then exits)
+  # -------------------------------------------------------------------
+  metric-generator:
+    build: .
+    command: >
+      python scripts/generate_metrics.py
+    volumes:
+      - app-data:/app/data
+    restart: "no"
+
+  # -------------------------------------------------------------------
+  # TimescaleDB: Metric storage
+  # -------------------------------------------------------------------
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: rca_system
+    volumes:
+      - ts-data:/var/lib/postgresql/data
+      - ./infra/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  # -------------------------------------------------------------------
+  # Redis: Stream-based metric pipeline
+  # -------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+      - ./infra/redis.conf:/usr/local/etc/redis/redis.conf
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      start_period: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------
+  # Prometheus: Metric scraping
+  # -------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prom-data:/prometheus
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------
+  # Backend: FastAPI + Uvicorn
+  # -------------------------------------------------------------------
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - app-data:/app/data
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=info
+      # Override config.yaml localhost references for Docker networking
+      - RCA_DB_HOST=timescaledb
+      - RCA_DB_PORT=5432
+      - RCA_DB_USER=postgres
+      - RCA_DB_PASSWORD=password
+      - RCA_DB_NAME=rca_system
+      - RCA_REDIS_HOST=redis
+      - RCA_REDIS_PORT=6379
+      - RCA_PROMETHEUS_URL=http://prometheus:9090
+    depends_on:
+      generate:
+        condition: service_completed_successfully
+      metric-generator:
+        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 5
+
+  # -------------------------------------------------------------------
+  # Frontend: React Dashboard (Nginx)
+  # -------------------------------------------------------------------
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------
+  # MLflow (Aditya — enable when experiment tracking is ready)
+  # -------------------------------------------------------------------
+  # mlflow:
+  #   image: ghcr.io/mlflow/mlflow:v2.11.1
+  #   ports:
+  #     - "5000:5000"
+  #   command: >
+  #     mlflow server
+  #       --host 0.0.0.0
+  #       --port 5000
+  #       --backend-store-uri sqlite:///mlflow.db
+  #       --default-artifact-root /mlflow/artifacts
+  #   volumes:
+  #     - mlflow-data:/mlflow
+  #   restart: unless-stopped
+
+volumes:
+  app-data:
+    driver: local
+  ts-data:
+    driver: local
+  redis-data:
+    driver: local
+  prom-data:
+    driver: local
+  # mlflow-data:
+  #   driver: local

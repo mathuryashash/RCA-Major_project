@@ -1,0 +1,43 @@
+# config.yaml - Log File Ingestion Configuration
+
+log_sources:
+  - label: application
+    path: ./data/logs/app.log
+    format: plaintext # or: json, syslog
+  - label: database
+    path: ./data/logs/db.log
+    format: plaintext
+  - label: system
+    path: ./data/logs/syslog.log
+    format: syslog
+
+metric_sources:
+  prometheus_url: http://localhost:9090
+  scrape_interval_seconds: 60
+
+# TimescaleDB configuration
+database:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: password
+  dbname: rca_system
+
+# Anomaly Detection Settings
+anomaly_detection:
+  window_size: 60
+  threshold_percentile: 99
+  alpha: 0.80 # weight for model_score vs rarity_prior
+
+# Causal Inference Settings
+causal_inference:
+  lags: 6
+  fdr_alpha: 0.05
+  correlation_window_minutes: 2
+
+# Redis Configuration
+redis:
+  host: localhost
+  port: 6379
+  stream_name: rca_metrics
+  consumer_group: rca_pipeline

@@ -1,0 +1,794 @@
+# remediation_rules.yaml
+# Maps each root cause type to its full remediation plan:
+#   - tier1_auto: Safe, reversible, auto-executable actions
+#   - tier2_guided: Step-by-step walkthrough for human execution
+#   - tier3_advisory: Long-term prevention / architectural recommendations
+#   - prevention: Checklist items by horizon (immediate / short_term / long_term)
+#
+# Commands use Jinja2 placeholders: {{ service }}, {{ k8s_namespace }}, {{ host }}, etc.
+# NOTE: 'namespace' is a Jinja2 builtin — use 'k8s_namespace' instead.
+# The Remediation Engine renders these with environment context at runtime.
+
+# ---------------------------------------------------------------------------
+# Case Study 1: DB Migration Failure
+# ---------------------------------------------------------------------------
+db_migration_applied:
+  description: "Database schema migration caused query plan regression and connection pool exhaustion"
+  tier1_auto:
+    - action: flush_query_cache
+      description: "Flush query plan cache to reset planner statistics"
+      command: "SELECT pg_stat_reset();"
+      platform: postgresql
+      est_seconds: 5
+      reversible: true
+    - action: restart_connection_pool
+      description: "Restart connection pool manager to release saturated connections"
+      command: "sudo systemctl restart pgbouncer"
+      platform: systemd
+      est_seconds: 10
+      reversible: true
+
+  tier2_guided:
+    - step: 1
+      title: "Verify current migration version"
+      command: "alembic current"
+      expected_output: "head ({{ migration_version | default('v2.14.3') }})"
+      verification: "alembic history | head -3"
+      rollback_step: "No rollback needed - read-only check"
+      est_minutes: 1
+      safety_note: "Read-only operation, no risk"
+    - step: 2
+      title: "Roll back DB migration"
+      command: "alembic downgrade -1"
+      expected_output: "Migration rolled back to previous revision"
+      verification: "alembic current -- should show previous version"
+      rollback_step: "alembic upgrade +1 -- re-apply the migration"
+      est_minutes: 8
+      safety_note: "Down-migration is reversible - original index restored"
+    - step: 3
+      title: "Force PostgreSQL to use original index"
+      command: "SET enable_seqscan=off; EXPLAIN ANALYZE SELECT * FROM {{ table | default('product_variants') }} LIMIT 100;"
+      expected_output: "Index Scan using {{ index_name | default('idx_product_variants') }}"
+      verification: "Check EXPLAIN output shows Index Scan, not Seq Scan"
+      rollback_step: "SET enable_seqscan=on;"
+      est_minutes: 2
+      safety_note: "Disabling seq scan is session-level only, resets on disconnect"
+    - step: 4
+      title: "Verify query latency returned to baseline"
+      command: "SELECT mean_exec_time FROM pg_stat_statements WHERE query LIKE '%{{ table | default('product_variants') }}%' ORDER BY mean_exec_time DESC LIMIT 5;"
+      expected_output: "mean_exec_time < 50ms"
+      verification: "Compare with pre-migration baseline from monitoring"
+      rollback_step: "If latency still elevated, proceed to Tier 3 advisory"
+      est_minutes: 1
+      safety_note: "Read-only monitoring query"
+
+  tier3_advisory:
+    - recommendation: "Require EXPLAIN ANALYZE benchmarks before all future schema migrations"
+      horizon: short_term
+      owner: DBA
+      priority: 0.91
+      effort: "2-3 days to integrate into CI/CD pipeline"
+    - recommendation: "Implement pre-migration query performance regression tests in CI/CD"
+      horizon: long_term
+      owner: DevOps
+      priority: 0.85
+      effort: "1-2 weeks"
+    - recommendation: "Add connection pool saturation alert at 80% threshold"
+      horizon: immediate
+      owner: SRE
+      priority: 0.88
+      effort: "1 hour"
+
+  prevention:
+    immediate:
+      - "Add index usage monitoring alert for all tables with >1M rows"
+      - "Increase connection pool from 100 to 200 as safety margin"
+      - "Add DB migration canary check to CI/CD pipeline"
+    short_term:
+      - "Implement pre-migration query performance benchmarks using EXPLAIN ANALYZE"
+      - "Enforce schema change review board with DBA sign-off"
+      - "Add load testing stage to deployment pipeline for DB-touching changes"
+    long_term:
+      - "Implement blue/green deployment strategy for all DB migrations"
+      - "Build automated rollback triggers on error rate breach"
+      - "Adopt online schema change tools (gh-ost or pt-online-schema-change)"
+
+# ---------------------------------------------------------------------------
+# Case Study 2: Memory Leak (SaaS Platform)
+# ---------------------------------------------------------------------------
+memory_leak_detected:
+  description: "Code deployment introduced WebSocket connection leak causing cascading memory failure"
+  tier1_auto:
+    - action: rolling_restart
+      description: "Restart all API server instances (rolling restart)"
+      command: "kubectl rollout restart deployment/{{ service | default('node-api') }} -n {{ k8s_namespace | default('production') }}"
+      platform: kubernetes
+      est_seconds: 180
+      reversible: true
+    - action: force_gc
+      description: "Force garbage collection on running instances"
+      command: "kill -SIGUSR1 $(pgrep {{ process | default('node') }})"
+      platform: linux
+      est_seconds: 5
+      reversible: true
+
+  tier2_guided:
+    - step: 1
+      title: "Roll back deployment to previous stable version"
+      command: "kubectl rollout undo deployment/{{ service | default('node-api') }} --to-revision={{ revision | default('13') }}"
+      expected_output: "deployment.apps/{{ service | default('node-api') }} rolled back"
+      verification: "kubectl rollout status deployment/{{ service | default('node-api') }}"
+      rollback_step: "kubectl rollout undo deployment/{{ service | default('node-api') }}"
+      est_minutes: 2
+      safety_note: "Ensure no active transactions on dependent services before proceeding"
+    - step: 2
+      title: "Verify rollback completed successfully"
+      command: "kubectl rollout status deployment/{{ service | default('node-api') }}"
+      expected_output: "deployment '{{ service | default('node-api') }}' successfully rolled out"
+      verification: "kubectl get pods -l app={{ service | default('node-api') }} -- all pods should be Running"
+      rollback_step: "N/A - verification step"
+      est_minutes: 1
+      safety_note: "Wait for all pods to reach Ready state"
+    - step: 3
+      title: "Monitor memory trend for 30 minutes post-rollback"
+      command: "watch -n 30 'kubectl top pods -l app={{ service | default('node-api') }}'"
+      expected_output: "Memory usage stable, not increasing over time"
+      verification: "Memory should be flat or decreasing after 30 minutes"
+      rollback_step: "If memory still growing, escalate to Tier 3"
+      est_minutes: 30
+      safety_note: "Do not proceed until memory trend is confirmed stable"
+
+  tier3_advisory:
+    - recommendation: "Add connection.close() in WebSocket disconnect handler in {{ version | default('v2.14.3') }} source code"
+      horizon: immediate
+      owner: Dev
+      priority: 0.95
+      effort: "2-4 hours code fix + review"
+    - recommendation: "Add memory leak detection test to CI/CD pipeline"
+      horizon: short_term
+      owner: DevOps
+      priority: 0.88
+      effort: "1-2 days"
+    - recommendation: "Implement automated memory regression testing with heap snapshot comparison"
+      horizon: long_term
+      owner: Dev
+      priority: 0.80
+      effort: "1-2 weeks"
+
+  prevention:
+    immediate:
+      - "Restart affected pods to reclaim memory"
+      - "Set memory resource limits on all deployments"
+      - "Add memory growth rate alert (>10% increase per hour)"
+    short_term:
+      - "Add heap snapshot comparison to CI/CD pipeline"
+      - "Implement connection pool auditing for WebSocket services"
+      - "Add automated canary deployment with memory monitoring gate"
+    long_term:
+      - "Adopt chaos engineering - inject memory pressure to test resilience"
+      - "Implement automated rollback on memory threshold breach"
+      - "Build connection lifecycle tracking dashboard"
+
+# ---------------------------------------------------------------------------
+# Case Study 3: Network Partition / Split-Brain
+# ---------------------------------------------------------------------------
+network_partition_detected:
+  description: "Network partition caused Redis cluster split-brain with independent writes on both sides"
+  tier1_auto:
+    - action: activate_circuit_breaker
+      description: "Activate circuit breaker on cross-region traffic"
+      command: "curl -X POST http://{{ circuit_breaker_host | default('circuit-breaker-api') }}/trip?service=cross-region"
+      platform: http
+      est_seconds: 5
+      reversible: true
+
+  tier2_guided:
+    - step: 1
+      title: "Halt all trading (risk management circuit breaker)"
+      command: "./trading-halt.sh --reason=split-brain --severity=critical"
+      expected_output: "Trading halted successfully. All order queues drained."
+      verification: "curl http://localhost:8080/api/trading/status -- should return 'HALTED'"
+      rollback_step: "./trading-resume.sh --reason=manual"
+      est_minutes: 2
+      safety_note: "CRITICAL: This halts all trading activity. Confirm with risk management before executing."
+    - step: 2
+      title: "Force Redis cluster quorum to primary region"
+      command: "redis-cli --cluster fix {{ redis_host | default('us-east-redis-01') }}:6379"
+      expected_output: "Cluster fixed, all slots assigned to primary partition"
+      verification: "redis-cli --cluster check {{ redis_host | default('us-east-redis-01') }}:6379"
+      rollback_step: "redis-cli --cluster fix {{ redis_secondary | default('us-west-redis-01') }}:6379"
+      est_minutes: 5
+      safety_note: "Data in secondary partition may be lost. Ensure reconciliation in step 3."
+    - step: 3
+      title: "Reconcile transaction state between regions"
+      command: "python reconcile_transactions.py --start={{ partition_time | default('2026-03-15T10:00:00') }}"
+      expected_output: "Reconciliation complete. X transactions resolved."
+      verification: "python verify_reconciliation.py --report"
+      rollback_step: "Manual review required for conflicting transactions"
+      est_minutes: 45
+      safety_note: "May take 30-60 minutes depending on transaction volume during partition"
+
+  tier3_advisory:
+    - recommendation: "Implement Redis Sentinel with strict majority quorum (minimum 3 nodes required for writes)"
+      horizon: long_term
+      owner: Platform
+      priority: 0.95
+      effort: "2-3 weeks"
+    - recommendation: "Add BGP route monitoring with automated failover"
+      horizon: short_term
+      owner: Network
+      priority: 0.90
+      effort: "1 week"
+
+  prevention:
+    immediate:
+      - "Activate circuit breaker on cross-region traffic"
+      - "Enable strict quorum mode on Redis cluster"
+      - "Set up cross-region latency monitoring with 100ms alert threshold"
+    short_term:
+      - "Implement Redis Sentinel with strict majority quorum"
+      - "Add BGP route leak detection and monitoring"
+      - "Build automated network partition detection and response"
+    long_term:
+      - "Redesign Redis cluster for CRDT-based conflict resolution"
+      - "Implement multi-region consensus protocol (Raft/Paxos)"
+      - "Build chaos engineering program for network partition testing"
+
+# ---------------------------------------------------------------------------
+# Case Study 4: Thread Pool Exhaustion (IoT)
+# ---------------------------------------------------------------------------
+thread_pool_exhaustion:
+  description: "Background ingestion job consumed all API threads causing complete API failure"
+  tier1_auto:
+    - action: kill_ingestion_job
+      description: "Kill ingestion job process immediately to release threads"
+      command: "sudo kill -9 $(pgrep -f {{ process_pattern | default('sensor_ingestion_job') }})"
+      platform: linux
+      est_seconds: 5
+      reversible: false
+    - action: restart_api
+      description: "Restart API service to release blocked threads"
+      command: "sudo systemctl restart {{ service | default('iot-api') }}"
+      platform: systemd
+      est_seconds: 45
+      reversible: true
+
+  tier2_guided:
+    - step: 1
+      title: "Verify all threads released after restart"
+      command: "curl http://localhost:8080/actuator/metrics/executor.active | jq .measurements"
+      expected_output: "active thread count near 0 or normal baseline"
+      verification: "Compare with baseline thread count from before incident"
+      rollback_step: "N/A - read-only verification"
+      est_minutes: 1
+      safety_note: "Wait 30 seconds after restart before checking"
+    - step: 2
+      title: "Re-schedule ingestion job to dedicated thread pool"
+      command: "Edit application.yaml: ingestion.thread-pool.size=10, isolation=true; sudo systemctl restart {{ service | default('iot-api') }}"
+      expected_output: "Service restarted with isolated thread pool for ingestion"
+      verification: "curl http://localhost:8080/actuator/metrics/executor.active -- should show separate pools"
+      rollback_step: "Revert application.yaml changes and restart"
+      est_minutes: 5
+      safety_note: "Ensure ingestion job is not running before restarting"
+
+  tier3_advisory:
+    - recommendation: "Refactor ingestion job to use CompletableFuture async processing"
+      horizon: short_term
+      owner: Backend Dev
+      priority: 0.90
+      effort: "3-5 days"
+    - recommendation: "Implement thread pool monitoring with automatic scaling"
+      horizon: long_term
+      owner: Platform
+      priority: 0.80
+      effort: "1-2 weeks"
+
+  prevention:
+    immediate:
+      - "Kill the offending background job"
+      - "Add thread pool utilization alert at 80% threshold"
+      - "Set API thread pool minimum to 20 reserved threads"
+    short_term:
+      - "Isolate background jobs to dedicated thread pool"
+      - "Add circuit breaker for long-running DB queries"
+      - "Implement job scheduling with resource limits"
+    long_term:
+      - "Refactor synchronous jobs to async with backpressure"
+      - "Implement dedicated worker service for heavy computation"
+      - "Add load shedding for non-critical API endpoints"
+
+# ---------------------------------------------------------------------------
+# Case Study 5: DNS Propagation Delay
+# ---------------------------------------------------------------------------
+dns_ttl_misconfiguration:
+  description: "DNS record update with high TTL caused regional traffic routing failure during failover"
+  tier1_auto:
+    - action: set_emergency_ttl
+      description: "Set emergency low DNS TTL to force rapid cache expiry"
+      command: "aws route53 change-resource-record-sets --hosted-zone-id {{ zone_id | default('ZONE_ID') }} --change-batch file://ttl-60s.json"
+      platform: aws
+      est_seconds: 10
+      reversible: true
+    - action: flush_dns_cache
+      description: "Flush DNS cache on all affected API nodes"
+      command: "ansible {{ node_group | default('us-west-api') }} -m command -a 'systemd-resolve --flush-caches'"
+      platform: ansible
+      est_seconds: 30
+      reversible: true
+
+  tier2_guided:
+    - step: 1
+      title: "Verify DNS resolution for affected endpoint"
+      command: "dig @8.8.8.8 {{ domain | default('api.storage.example.com') }}"
+      expected_output: "New IP address returned matching healthy endpoint"
+      verification: "Compare returned IP with expected healthy endpoint IP"
+      rollback_step: "N/A - read-only DNS lookup"
+      est_minutes: 1
+      safety_note: "Check from multiple DNS resolvers to confirm propagation"
+    - step: 2
+      title: "Update load balancer health check to bypass stale DNS"
+      command: "aws elbv2 modify-target-group --target-group-arn {{ target_group_arn | default('ARN') }} --health-check-path /health"
+      expected_output: "Target group health check updated"
+      verification: "aws elbv2 describe-target-health --target-group-arn {{ target_group_arn | default('ARN') }}"
+      rollback_step: "Revert health check path to previous value"
+      est_minutes: 2
+      safety_note: "Ensure /health endpoint exists on all targets"
+    - step: 3
+      title: "Monitor regional error rate until below 1%"
+      command: "watch -n 10 'curl -s https://metrics/api/error_rate?region={{ region | default('us-west') }}'"
+      expected_output: "Error rate steadily decreasing, target < 1%"
+      verification: "Error rate < 1% sustained for 5 minutes"
+      rollback_step: "If error rate not decreasing, check DNS propagation status"
+      est_minutes: 10
+      safety_note: "DNS propagation may take up to TTL duration (5 minutes with 300s TTL)"
+
+  tier3_advisory:
+    - recommendation: "Implement DNS health check monitoring with automated failover (Route53 health checks + failover routing)"
+      horizon: long_term
+      owner: Platform/SRE
+      priority: 0.92
+      effort: "1-2 weeks"
+    - recommendation: "Add DNS propagation verification step to all failover runbooks"
+      horizon: short_term
+      owner: SRE
+      priority: 0.85
+      effort: "2-3 days"
+    - recommendation: "Set default DNS TTL to 60 seconds for all critical services"
+      horizon: immediate
+      owner: SRE
+      priority: 0.90
+      effort: "1 hour"
+
+  prevention:
+    immediate:
+      - "Set emergency low TTL on all critical DNS records"
+      - "Flush DNS caches on all affected nodes"
+      - "Add DNS resolution monitoring for all regions"
+    short_term:
+      - "Implement Route53 health checks with automated failover"
+      - "Add DNS propagation verification to all failover runbooks"
+      - "Set default TTL to 60s for all critical service endpoints"
+    long_term:
+      - "Implement anycast DNS for all customer-facing services"
+      - "Build automated DNS failover testing into chaos engineering program"
+      - "Adopt multi-CDN strategy with DNS-independent health checking"
+
+# ---------------------------------------------------------------------------
+# Case Study 6: CPU Saturation (Runaway Process)
+# ---------------------------------------------------------------------------
+cpu_runaway_process:
+  description: "Runaway process consumed all CPU cores causing service unresponsiveness and health check failures"
+  tier1_auto:
+    - action: kill_runaway_process
+      description: "Kill the runaway process by PID to immediately free CPU"
+      command: "sudo kill -9 $(pgrep -f '{{ process_pattern | default('runaway_job') }}')"
+      platform: linux
+      est_seconds: 5
+      reversible: false
+    - action: restart_service
+      description: "Restart the affected application service"
+      command: "sudo systemctl restart {{ service | default('application') }}"
+      platform: systemd
+      est_seconds: 30
+      reversible: true
+
+  tier2_guided:
+    - step: 1
+      title: "Identify the runaway process and root cause"
+      command: "ps aux --sort=-%cpu | head -20"
+      expected_output: "Top CPU-consuming processes listed with PIDs and CPU%"
+      verification: "Confirm the offending process matches the anomaly detector's finding"
+      rollback_step: "N/A - read-only check"
+      est_minutes: 1
+      safety_note: "Read-only operation, safe to run at any time"
+    - step: 2
+      title: "Set CPU resource limits on the process"
+      command: "sudo cpulimit -p {{ pid | default('PID') }} -l 50"
+      expected_output: "Process CPU usage throttled to 50%"
+      verification: "top -p {{ pid | default('PID') }} -- confirm CPU% near 50"
+      rollback_step: "Kill the cpulimit process to remove the limit"
+      est_minutes: 2
+      safety_note: "Throttling is preferable to killing if the process holds important state"
+    - step: 3
+      title: "Re-register service with load balancer"
+      command: "curl -X POST http://{{ lb_host | default('load-balancer') }}/api/register?service={{ service | default('application') }}"
+      expected_output: "Service re-registered and receiving traffic"
+      verification: "curl http://{{ lb_host | default('load-balancer') }}/api/health/{{ service | default('application') }} -- should return healthy"
+      rollback_step: "Manually remove from LB if service is still unstable"
+      est_minutes: 2
+      safety_note: "Only re-register after confirming CPU usage is under control"
+    - step: 4
+      title: "Verify system stability post-remediation"
+      command: "uptime && vmstat 1 5"
+      expected_output: "Load average below core count, CPU idle% > 30"
+      verification: "Monitor for 10 minutes — no recurrence of CPU spike"
+      rollback_step: "If CPU spikes again, proceed to Tier 3 advisory"
+      est_minutes: 10
+      safety_note: "Some processes may respawn — check crontab and systemd timers"
+
+  tier3_advisory:
+    - recommendation: "Add CPU cgroup limits for all background jobs and batch processes"
+      horizon: short_term
+      owner: DevOps
+      priority: 0.92
+      effort: "2-3 days"
+    - recommendation: "Implement regex timeout and complexity limits in application code"
+      horizon: short_term
+      owner: Backend Dev
+      priority: 0.88
+      effort: "1-2 days"
+    - recommendation: "Deploy process monitoring with automatic kill on sustained 100% CPU > 5 minutes"
+      horizon: long_term
+      owner: SRE
+      priority: 0.85
+      effort: "1-2 weeks"
+
+  prevention:
+    immediate:
+      - "Kill the offending runaway process"
+      - "Set CPU resource limits (cgroups) on batch job processes"
+      - "Add CPU utilization alert at 90% sustained for > 2 minutes"
+    short_term:
+      - "Implement cgroup resource limits for all non-critical processes"
+      - "Add regex complexity analysis and timeout guards in application code"
+      - "Deploy process watchdog that auto-kills runaway CPU consumers"
+    long_term:
+      - "Isolate batch workloads to dedicated compute nodes"
+      - "Implement job scheduler with resource quotas (CPU, memory, time)"
+      - "Add CPU profiling to CI/CD pipeline for performance regression detection"
+
+# ---------------------------------------------------------------------------
+# Case Study 7: Connection Pool Leak
+# ---------------------------------------------------------------------------
+connection_leak_bug:
+  description: "Application code failed to release database connections causing gradual pool exhaustion"
+  tier1_auto:
+    - action: restart_connection_pool
+      description: "Restart connection pool manager to release leaked connections"
+      command: "sudo systemctl restart {{ pool_manager | default('pgbouncer') }}"
+      platform: systemd
+      est_seconds: 10
+      reversible: true
+    - action: restart_application
+      description: "Restart application service to reset all connection handles"
+      command: "sudo systemctl restart {{ service | default('application') }}"
+      platform: systemd
+      est_seconds: 30
+      reversible: true
+
+  tier2_guided:
+    - step: 1
+      title: "Check current connection pool status"
+      command: "psql -c \"SELECT count(*) as total, state FROM pg_stat_activity GROUP BY state;\""
+      expected_output: "Shows idle, active, idle in transaction connection counts"
+      verification: "Look for abnormally high 'idle in transaction' count"
+      rollback_step: "N/A - read-only check"
+      est_minutes: 1
+      safety_note: "Read-only query, safe to execute"
+    - step: 2
+      title: "Kill idle-in-transaction connections older than 5 minutes"
+      command: "psql -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE state = 'idle in transaction' AND state_change < now() - interval '5 minutes';\""
+      expected_output: "Leaked connections terminated"
+      verification: "Re-run step 1 to confirm idle-in-transaction count dropped"
+      rollback_step: "N/A - connections were already leaked/abandoned"
+      est_minutes: 2
+      safety_note: "Only terminates truly idle connections — active queries are not affected"
+    - step: 3
+      title: "Enable connection leak detection logging"
+      command: "psql -c \"ALTER SYSTEM SET log_min_duration_statement = 0; SELECT pg_reload_conf();\""
+      expected_output: "Connection logging enabled for leak tracing"
+      verification: "tail -f /var/log/postgresql/postgresql.log | grep 'idle in transaction'"
+      rollback_step: "ALTER SYSTEM RESET log_min_duration_statement; SELECT pg_reload_conf();"
+      est_minutes: 3
+      safety_note: "Increases log volume — revert after investigation"
+    - step: 4
+      title: "Verify pool health after remediation"
+      command: "pgbouncer -R && psql -p 6432 -c 'SHOW POOLS;'"
+      expected_output: "Pool shows healthy active/idle ratio, no exhaustion"
+      verification: "Monitor pool metrics for 15 minutes — connections should not leak again"
+      rollback_step: "If leak recurs, identify the code path and apply Tier 3 fix"
+      est_minutes: 15
+      safety_note: "If pool re-exhausts within 15 minutes, the code fix (Tier 3) is urgent"
+
+  tier3_advisory:
+    - recommendation: "Audit application code for missing connection.close() / context manager usage"
+      horizon: immediate
+      owner: Backend Dev
+      priority: 0.95
+      effort: "4-8 hours"
+    - recommendation: "Add connection pool metrics to monitoring dashboard (active, idle, waiting)"
+      horizon: short_term
+      owner: SRE
+      priority: 0.88
+      effort: "1-2 days"
+    - recommendation: "Implement connection pool leak detection in CI/CD integration tests"
+      horizon: long_term
+      owner: QA
+      priority: 0.82
+      effort: "1-2 weeks"
+
+  prevention:
+    immediate:
+      - "Restart connection pool and application to reclaim leaked connections"
+      - "Set idle_in_transaction_session_timeout to 300 seconds in PostgreSQL"
+      - "Add connection pool utilization alert at 80% threshold"
+    short_term:
+      - "Audit all database access code for proper connection release (context managers)"
+      - "Add connection pool health check to application /health endpoint"
+      - "Implement connection borrowing timeout (fail-fast at 10s instead of blocking)"
+    long_term:
+      - "Adopt ORM connection management with automatic cleanup (e.g., SQLAlchemy scoped sessions)"
+      - "Implement connection pool leak detector that logs stack traces on unreturned connections"
+      - "Add connection lifecycle integration tests to CI/CD pipeline"
+
+# ---------------------------------------------------------------------------
+# Case Study 8: Cache Stampede / TTL Expiry
+# ---------------------------------------------------------------------------
+cache_ttl_expiry:
+  description: "Simultaneous cache TTL expiry caused thundering herd of database queries overwhelming the backend"
+  tier1_auto:
+    - action: warm_cache
+      description: "Force immediate cache rebuild for the expired key"
+      command: "curl -X POST http://{{ cache_host | default('cache-api') }}/api/cache/warm?key={{ cache_key | default('product_catalog') }}"
+      platform: http
+      est_seconds: 15
+      reversible: true
+    - action: enable_stale_serving
+      description: "Enable stale-while-revalidate to serve expired cache during rebuild"
+      command: "redis-cli CONFIG SET lazyfree-lazy-expire yes && redis-cli SET {{ cache_key | default('product_catalog') }}:stale-ok 1 EX 300"
+      platform: redis
+      est_seconds: 5
+      reversible: true
+
+  tier2_guided:
+    - step: 1
+      title: "Verify cache miss rate and current state"
+      command: "redis-cli INFO stats | grep -E 'keyspace_(hits|misses)'"
+      expected_output: "High miss ratio indicates stampede in progress"
+      verification: "Calculate hit rate: hits/(hits+misses) — should be < 50% during stampede"
+      rollback_step: "N/A - read-only check"
+      est_minutes: 1
+      safety_note: "Read-only operation"
+    - step: 2
+      title: "Implement distributed lock for cache rebuild"
+      command: "redis-cli SET {{ cache_key | default('product_catalog') }}:lock 1 NX EX 60"
+      expected_output: "Lock acquired — only one process rebuilds the cache"
+      verification: "redis-cli GET {{ cache_key | default('product_catalog') }}:lock -- should return 1"
+      rollback_step: "redis-cli DEL {{ cache_key | default('product_catalog') }}:lock"
+      est_minutes: 1
+      safety_note: "Lock has 60s TTL — auto-expires if rebuild hangs"
+    - step: 3
+      title: "Rebuild cache with jittered TTL to prevent future synchronized expiry"
+      command: "python -c \"import redis,random; r=redis.Redis(); r.set('{{ cache_key | default('product_catalog') }}', r.get('{{ cache_key | default('product_catalog') }}:source') or 'REBUILD', ex={{ ttl | default(600) }} + random.randint(0, 120))\""
+      expected_output: "Cache key rebuilt with randomized TTL"
+      verification: "redis-cli TTL {{ cache_key | default('product_catalog') }} -- should show remaining TTL"
+      rollback_step: "redis-cli DEL {{ cache_key | default('product_catalog') }}"
+      est_minutes: 2
+      safety_note: "Adding jitter (0-120s) prevents all keys expiring simultaneously"
+    - step: 4
+      title: "Verify database load returned to normal"
+      command: "psql -c \"SELECT count(*) FROM pg_stat_activity WHERE state = 'active';\""
+      expected_output: "Active query count back to baseline (< 20)"
+      verification: "Monitor for 5 minutes — query rate should be stable"
+      rollback_step: "If DB still overloaded, implement request queuing (Tier 3)"
+      est_minutes: 5
+      safety_note: "Database may take a few minutes to drain queued queries"
+
+  tier3_advisory:
+    - recommendation: "Implement stale-while-revalidate pattern for all high-traffic cache keys"
+      horizon: short_term
+      owner: Backend Dev
+      priority: 0.93
+      effort: "2-3 days"
+    - recommendation: "Add TTL jitter (random offset) to all cache writes to prevent synchronized expiry"
+      horizon: short_term
+      owner: Backend Dev
+      priority: 0.90
+      effort: "1 day"
+    - recommendation: "Implement distributed cache rebuild locking to prevent thundering herd"
+      horizon: long_term
+      owner: Platform
+      priority: 0.85
+      effort: "1-2 weeks"
+
+  prevention:
+    immediate:
+      - "Force cache warm-up for expired high-traffic keys"
+      - "Enable stale-while-revalidate for critical cache keys"
+      - "Add cache miss rate alert threshold at > 20%"
+    short_term:
+      - "Add random TTL jitter (±10%) to all cache writes"
+      - "Implement distributed locking for cache rebuild (single-flight pattern)"
+      - "Add cache warm-up job that pre-populates keys before TTL expiry"
+    long_term:
+      - "Implement multi-tier caching (local + distributed) for critical paths"
+      - "Build cache dependency graph to warm related keys proactively"
+      - "Adopt cache-aside pattern with background refresh for hot keys"
+
+# ---------------------------------------------------------------------------
+# Case Study 9: Disk Space Exhaustion / Log Rotation Disabled
+# ---------------------------------------------------------------------------
+log_rotation_disabled:
+  description: "Missing log rotation configuration caused disk space exhaustion, blocking database WAL writes"
+  tier1_auto:
+    - action: emergency_log_cleanup
+      description: "Truncate largest log files to free immediate disk space"
+      command: "sudo truncate -s 0 /var/log/application/app.log && sudo truncate -s 0 /var/log/application/debug.log"
+      platform: linux
+      est_seconds: 5
+      reversible: false
+    - action: restart_database
+      description: "Restart database after freeing disk space for WAL writes"
+      command: "sudo systemctl restart {{ db_service | default('postgresql') }}"
+      platform: systemd
+      est_seconds: 30
+      reversible: true
+
+  tier2_guided:
+    - step: 1
+      title: "Check disk usage and identify largest files"
+      command: "df -h /var/log && du -sh /var/log/* | sort -rh | head -10"
+      expected_output: "Shows disk usage and top space consumers"
+      verification: "Identify which log files consumed the most space"
+      rollback_step: "N/A - read-only check"
+      est_minutes: 1
+      safety_note: "Read-only operation"
+    - step: 2
+      title: "Configure logrotate for the missing application"
+      command: "sudo tee /etc/logrotate.d/application <<'CONF'\n/var/log/application/*.log {\n    daily\n    rotate 7\n    compress\n    delaycompress\n    missingok\n    notifempty\n    maxsize 500M\n    copytruncate\n}\nCONF"
+      expected_output: "Logrotate configuration created"
+      verification: "sudo logrotate -d /etc/logrotate.d/application -- dry-run should show rotation plan"
+      rollback_step: "sudo rm /etc/logrotate.d/application"
+      est_minutes: 2
+      safety_note: "Using copytruncate to avoid needing to signal the application"
+    - step: 3
+      title: "Force immediate log rotation"
+      command: "sudo logrotate -f /etc/logrotate.d/application"
+      expected_output: "Logs rotated, compressed old files created"
+      verification: "ls -la /var/log/application/ -- should show rotated .gz files and small current log"
+      rollback_step: "N/A - rotation is non-destructive with compressed backups"
+      est_minutes: 1
+      safety_note: "Old logs preserved as compressed archives"
+    - step: 4
+      title: "Verify disk space recovered and services healthy"
+      command: "df -h /var/log && sudo systemctl status {{ db_service | default('postgresql') }} {{ service | default('application') }}"
+      expected_output: "Disk usage < 80%, database and application running"
+      verification: "Monitor disk usage for 24 hours to confirm rotation is working"
+      rollback_step: "If disk fills again within 24h, investigate log verbosity (Tier 3)"
+      est_minutes: 2
+      safety_note: "Database may need manual WAL cleanup if recovery was incomplete"
+
+  tier3_advisory:
+    - recommendation: "Audit all services for missing logrotate configurations"
+      horizon: immediate
+      owner: SRE
+      priority: 0.95
+      effort: "2-4 hours"
+    - recommendation: "Implement centralized log shipping (ELK/Loki) to reduce local disk dependency"
+      horizon: long_term
+      owner: Platform
+      priority: 0.85
+      effort: "2-3 weeks"
+    - recommendation: "Add disk usage monitoring with predictive alerts (predict full in N hours)"
+      horizon: short_term
+      owner: SRE
+      priority: 0.90
+      effort: "2-3 days"
+
+  prevention:
+    immediate:
+      - "Truncate oversized log files to free disk space"
+      - "Configure logrotate for all application log directories"
+      - "Add disk usage alert at 80% threshold with escalation at 90%"
+    short_term:
+      - "Audit all services and ensure logrotate is configured for every log path"
+      - "Implement log level management (reduce DEBUG logging in production)"
+      - "Add disk space predictive monitoring (alert when projected to fill within 24h)"
+    long_term:
+      - "Implement centralized log aggregation (ELK, Loki, or CloudWatch)"
+      - "Separate log volumes from application/data volumes (dedicated /var/log mount)"
+      - "Add disk space guardrails in deployment pipeline (reject deploys if disk > 70%)"
+
+# ---------------------------------------------------------------------------
+# Case Study 10: Message Queue Backlog / Consumer Crash
+# ---------------------------------------------------------------------------
+consumer_service_crash:
+  description: "Consumer service crash caused unbounded message queue backlog with upstream producer backpressure"
+  tier1_auto:
+    - action: restart_consumer
+      description: "Restart the crashed consumer service"
+      command: "sudo systemctl restart {{ consumer_service | default('queue-consumer') }}"
+      platform: systemd
+      est_seconds: 15
+      reversible: true
+    - action: scale_consumers
+      description: "Scale up consumer replicas to drain backlog faster"
+      command: "kubectl scale deployment/{{ consumer_service | default('queue-consumer') }} --replicas={{ replicas | default(5) }} -n {{ k8s_namespace | default('production') }}"
+      platform: kubernetes
+      est_seconds: 60
+      reversible: true
+
+  tier2_guided:
+    - step: 1
+      title: "Check consumer health and queue backlog depth"
+      command: "rabbitmqctl list_queues name messages consumers | grep {{ queue | default('order-processing') }}"
+      expected_output: "Shows queue name, message count (backlog), and consumer count"
+      verification: "Consumer count should be 0 (crashed) and message count growing"
+      rollback_step: "N/A - read-only check"
+      est_minutes: 1
+      safety_note: "Read-only operation"
+    - step: 2
+      title: "Restart consumer with increased resources"
+      command: "kubectl set resources deployment/{{ consumer_service | default('queue-consumer') }} -c {{ consumer_service | default('queue-consumer') }} --limits=memory=2Gi,cpu=2 && kubectl rollout restart deployment/{{ consumer_service | default('queue-consumer') }}"
+      expected_output: "Consumer restarted with higher resource limits"
+      verification: "kubectl get pods -l app={{ consumer_service | default('queue-consumer') }} -- pods should be Running"
+      rollback_step: "kubectl rollout undo deployment/{{ consumer_service | default('queue-consumer') }}"
+      est_minutes: 3
+      safety_note: "Increased resources may be needed if crash was OOM-related"
+    - step: 3
+      title: "Monitor backlog drain rate"
+      command: "watch -n 10 'rabbitmqctl list_queues name messages consumers | grep {{ queue | default('order-processing') }}'"
+      expected_output: "Message count steadily decreasing, consumer count > 0"
+      verification: "Backlog should drain at > 1000 msg/min with healthy consumers"
+      rollback_step: "If backlog not draining, check consumer logs for recurring crash"
+      est_minutes: 15
+      safety_note: "Full drain may take time — do not prematurely scale down"
+    - step: 4
+      title: "Scale consumers back to normal after backlog is cleared"
+      command: "kubectl scale deployment/{{ consumer_service | default('queue-consumer') }} --replicas={{ normal_replicas | default(2) }} -n {{ k8s_namespace | default('production') }}"
+      expected_output: "Consumer scaled back to normal replica count"
+      verification: "Queue depth stable near 0, processing latency normal"
+      rollback_step: "Scale back up if backlog re-accumulates"
+      est_minutes: 2
+      safety_note: "Only scale down after backlog is fully drained"
+
+  tier3_advisory:
+    - recommendation: "Fix the root cause of consumer crash (OOM, unhandled exception, or dependency failure)"
+      horizon: immediate
+      owner: Backend Dev
+      priority: 0.95
+      effort: "4-8 hours to diagnose and fix"
+    - recommendation: "Implement dead letter queue (DLQ) for poison messages that crash consumers"
+      horizon: short_term
+      owner: Backend Dev
+      priority: 0.90
+      effort: "2-3 days"
+    - recommendation: "Add consumer auto-scaling based on queue depth metrics"
+      horizon: long_term
+      owner: Platform
+      priority: 0.82
+      effort: "1-2 weeks"
+
+  prevention:
+    immediate:
+      - "Restart crashed consumer service"
+      - "Scale up consumer replicas to drain backlog"
+      - "Add queue depth alert threshold at 10000 messages"
+    short_term:
+      - "Implement dead letter queue (DLQ) for messages that cause consumer crashes"
+      - "Add consumer health monitoring with automatic restart on crash"
+      - "Implement producer-side backpressure (reject publishes when queue depth > threshold)"
+    long_term:
+      - "Implement consumer auto-scaling based on queue depth (KEDA or custom HPA)"
+      - "Build circuit breaker between producers and message queue"
+      - "Add message schema validation to prevent poison messages from reaching consumers"

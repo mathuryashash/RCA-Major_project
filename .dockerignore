@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Node / Frontend (built separately)
+frontend/node_modules/
+frontend/dist/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Testing / Cache
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.tox/
+.nox/
+
+# Git
+.git/
+.gitignore
+
+# Docker (don't send docker files into context)
+docker-compose.yml
+docker-compose.override.yml
+
+# Docs / non-runtime files
+*.md
+*.docx
+PRD.md
+PRD.docx
+docs/
+progress.txt
+.claude/
+.qodo/
+
+# Temporary test dirs
+testsintegration/
+testssystem/
+testsunit/
+datalogs/
+nul

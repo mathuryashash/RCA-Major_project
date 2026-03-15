@@ -1,0 +1,108 @@
+{# RCA Narrative Report Template (FR-29)
+   Produces human-readable prose narrative for the NLG module.
+   Output: Markdown format.
+
+   Expected context variables:
+     incident_id, detected_at, summary, root_cause, confidence,
+     confidence_label, severity_label, causal_chain[], evidence[],
+     recommendations[], prevention (dict with immediate/short_term/long_term)
+#}
+# Root Cause Analysis Report
+
+**Incident:** {{ incident_id }}  
+**Detected:** {{ detected_at }}  
+**Severity:** {{ severity_label | default('Medium') }}  
+**Root Cause Confidence:** {{ confidence_label | default('Unknown') }} ({{ (confidence * 100) | round(1) }}%)
+
+---
+
+## Executive Summary
+
+{{ summary }}
+
+{% if confidence >= 0.7 %}
+The analysis identifies **{{ root_cause_display }}** as the root cause with **{{ confidence_label | lower }}** confidence ({{ (confidence * 100) | round(1) }}%).
+{% elif confidence >= 0.4 %}
+The analysis suggests **{{ root_cause_display }}** as a probable root cause, though confidence is moderate ({{ (confidence * 100) | round(1) }}%). Human review is recommended before executing remediation.
+{% else %}
+The analysis detected anomalies but could not determine a definitive root cause. The most likely candidate is **{{ root_cause_display }}** at {{ (confidence * 100) | round(1) }}% confidence. Manual investigation is required.
+{% endif %}
+
+---
+
+## Causal Chain Analysis
+
+The following causal propagation path was identified:
+
+{% for step in causal_chain %}
+{% if loop.first %}
+**Origin:** {{ step.from_display }}{{ " at " ~ step.from_time if step.from_time else "" }} {{ step.causal_verb | default('caused') }} {{ step.to_display | lower }}{{ " at " ~ step.to_time if step.to_time else "" }} (p-value: {{ step.p_value | round(3) }}, lag: {{ step.lag_display }}).
+{% else %}
+This {{ step.causal_verb | default('led to') }} {{ step.to_display | lower }}{{ " at " ~ step.to_time if step.to_time else "" }} (p-value: {{ step.p_value | round(3) }}, lag: {{ step.lag_display }}).
+{% endif %}
+{% endfor %}
+{% if not causal_chain %}
+No statistically significant causal relationships were detected in this analysis window. The anomalies may be independent or require a longer observation period.
+{% endif %}
+
+---
+
+## Evidence
+
+The following log entries and metrics support this diagnosis:
+
+{% for ev in evidence %}
+{% if ev.timestamp %}
+- **{{ ev.timestamp }}** — *{{ ev.source_display }}* recorded: "{{ ev.detail }}" (anomaly score: {{ ev.score | round(2) }})
+{% else %}
+- *{{ ev.source_display }}* recorded: "{{ ev.detail }}" (anomaly score: {{ ev.score | round(2) }})
+{% endif %}
+{% endfor %}
+
+---
+
+## Remediation Recommendations
+
+Based on the identified root cause (**{{ root_cause_display }}**):
+
+{% for action in recommendations %}
+{% if action.tier == "Tier 1" %}
+- **{{ action.tier }} (Auto-Execute):** {{ action.description }}{% if action.command %} — `{{ action.command }}`{% endif %}
+
+{% elif action.tier == "Tier 2" %}
+- **{{ action.tier }} (Guided):** {{ action.description }}
+{% else %}
+- **{{ action.tier }} (Advisory):** {{ action.description }}
+{% endif %}
+{% endfor %}
+
+{% if confidence < 0.7 %}
+> **Note:** Confidence is below the 70% threshold. All Tier 1 auto-execution is disabled. Recommendations are advisory only.
+{% endif %}
+
+---
+
+## Prevention Checklist
+
+{% if prevention and (prevention.immediate or prevention.short_term or prevention.long_term) %}
+### Immediate Actions
+{% for item in prevention.immediate | default([]) %}
+- [ ] {{ item }}
+{% endfor %}
+
+### Short-Term (1-2 weeks)
+{% for item in prevention.short_term | default([]) %}
+- [ ] {{ item }}
+{% endfor %}
+
+### Long-Term (1-3 months)
+{% for item in prevention.long_term | default([]) %}
+- [ ] {{ item }}
+{% endfor %}
+{% else %}
+No specific prevention items have been generated for this incident type.
+{% endif %}
+
+---
+
+*Report generated at {{ generated_at }} by the Automated RCA System v0.3.0*
