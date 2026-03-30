@@ -7,6 +7,7 @@ report lookups, analyze, remediate, and audit.
 
 import httpx
 import pytest
+import pytest_asyncio
 from httpx import ASGITransport
 from datetime import datetime
 
@@ -23,6 +24,25 @@ def client():
     """Async HTTP client wired to the FastAPI ASGI app."""
     transport = ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://test")
+
+
+@pytest_asyncio.fixture
+async def auth_client():
+    """Async HTTP client with JWT authentication."""
+    import os
+
+    os.environ["RCA_WEBHOOK_VALIDATE"] = "false"
+    import src.api.webhooks as webhooks
+
+    webhooks._webhook_validator = None
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        login_resp = await c.post(
+            "/auth/login", data={"username": "admin", "password": "admin123"}
+        )
+        token = login_resp.json()["access_token"]
+        c.headers["Authorization"] = f"Bearer {token}"
+        yield c
 
 
 def _deploy_event_payload() -> dict:
@@ -83,13 +103,12 @@ async def test_health_response_structure(client):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_incidents_endpoint(client):
+async def test_incidents_endpoint(auth_client):
     """GET /incidents returns 200 with a list."""
-    async with client as c:
-        resp = await c.get("/incidents")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert isinstance(data, list)
+    resp = await auth_client.get("/incidents")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
 
 
 # ---------------------------------------------------------------------------
@@ -113,24 +132,21 @@ async def test_docs_endpoint(client):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_deploy_webhook(client):
+async def test_deploy_webhook(auth_client):
     """POST /events/deploy with a valid payload returns 202."""
-    async with client as c:
-        resp = await c.post("/events/deploy", json=_deploy_event_payload())
-        assert resp.status_code == 202
+    resp = await auth_client.post("/events/deploy", json=_deploy_event_payload())
+    assert resp.status_code == 202
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_deploy_webhook_response_has_id(client):
+async def test_deploy_webhook_response_has_id(auth_client):
     """POST /events/deploy response includes an event_id field."""
-    async with client as c:
-        resp = await c.post("/events/deploy", json=_deploy_event_payload())
-        data = resp.json()
-        assert "event_id" in data or "id" in data
-        # Server uses event_id
-        if "event_id" in data:
-            assert data["event_id"].startswith("EVT-")
+    resp = await auth_client.post("/events/deploy", json=_deploy_event_payload())
+    data = resp.json()
+    assert "event_id" in data or "id" in data
+    if "event_id" in data:
+        assert data["event_id"].startswith("EVT-")
 
 
 # ---------------------------------------------------------------------------
@@ -140,11 +156,10 @@ async def test_deploy_webhook_response_has_id(client):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_config_webhook(client):
+async def test_config_webhook(auth_client):
     """POST /events/config with a valid payload returns 202."""
-    async with client as c:
-        resp = await c.post("/events/config", json=_config_event_payload())
-        assert resp.status_code == 202
+    resp = await auth_client.post("/events/config", json=_config_event_payload())
+    assert resp.status_code == 202
 
 
 # ---------------------------------------------------------------------------
@@ -154,24 +169,20 @@ async def test_config_webhook(client):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_events_list(client):
+async def test_events_list(auth_client):
     """POST a deploy event, then GET /events — the event should appear."""
-    async with client as c:
-        # Post a deploy event
-        post_resp = await c.post("/events/deploy", json=_deploy_event_payload())
-        assert post_resp.status_code == 202
-        event_id = post_resp.json().get("event_id")
+    post_resp = await auth_client.post("/events/deploy", json=_deploy_event_payload())
+    assert post_resp.status_code == 202
+    event_id = post_resp.json().get("event_id")
 
-        # List all events
-        list_resp = await c.get("/events")
-        assert list_resp.status_code == 200
-        data = list_resp.json()
-        assert "events" in data
-        assert data["total"] >= 1
+    list_resp = await auth_client.get("/events")
+    assert list_resp.status_code == 200
+    data = list_resp.json()
+    assert "events" in data
+    assert data["total"] >= 1
 
-        # Verify our event is in the list
-        event_ids = [e.get("event_id") for e in data["events"]]
-        assert event_id in event_ids
+    event_ids = [e.get("event_id") for e in data["events"]]
+    assert event_id in event_ids
 
 
 # ---------------------------------------------------------------------------
@@ -181,11 +192,10 @@ async def test_events_list(client):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_report_nonexistent_incident(client):
+async def test_report_nonexistent_incident(auth_client):
     """GET /report/NONEXISTENT should return 404."""
-    async with client as c:
-        resp = await c.get("/report/NONEXISTENT")
-        assert resp.status_code == 404
+    resp = await auth_client.get("/report/NONEXISTENT")
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -195,12 +205,10 @@ async def test_report_nonexistent_incident(client):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_audit_nonexistent_incident(client):
+async def test_audit_nonexistent_incident(auth_client):
     """GET /audit/NONEXISTENT should return 404 (incident not found)."""
-    async with client as c:
-        resp = await c.get("/audit/NONEXISTENT")
-        # Server raises 404 when incident_id not in incidents store
-        assert resp.status_code == 404
+    resp = await auth_client.get("/audit/NONEXISTENT")
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -210,14 +218,11 @@ async def test_audit_nonexistent_incident(client):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_analyze_endpoint_exists(client):
+async def test_analyze_endpoint_exists(auth_client):
     """POST /analyze with {} should return 202 or 422, but NOT 404."""
-    async with client as c:
-        resp = await c.post("/analyze", json={})
-        # 202 = accepted (pipeline starts), 422 = validation error
-        # Either is fine — the endpoint exists and is routed correctly
-        assert resp.status_code in (200, 202, 422)
-        assert resp.status_code != 404
+    resp = await auth_client.post("/analyze", json={})
+    assert resp.status_code in (200, 202, 422)
+    assert resp.status_code != 404
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +232,7 @@ async def test_analyze_endpoint_exists(client):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_remediate_endpoint_structure(client):
+async def test_remediate_endpoint_structure(auth_client):
     """POST /remediate/INC-TEST should return a meaningful response.
 
     Since INC-TEST doesn't exist as a completed incident, we expect either:
@@ -237,13 +242,10 @@ async def test_remediate_endpoint_structure(client):
 
     This test verifies the endpoint is routed and responds appropriately.
     """
-    async with client as c:
-        resp = await c.post("/remediate/INC-TEST")
-        # INC-TEST is not in the incidents store, so we expect 404
-        assert resp.status_code in (202, 400, 404, 409, 500)
+    resp = await auth_client.post("/remediate/INC-TEST")
+    assert resp.status_code in (202, 400, 404, 409, 500)
 
-        # If somehow the incident exists and we get a plan, verify structure
-        if resp.status_code == 202:
-            data = resp.json()
-            assert "incident_id" in data
-            assert "root_cause" in data or "remediation_plan" in data
+    if resp.status_code == 202:
+        data = resp.json()
+        assert "incident_id" in data
+        assert "root_cause" in data or "remediation_plan" in data

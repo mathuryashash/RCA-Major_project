@@ -2,7 +2,10 @@ import torch
 import torch.nn as nn
 import numpy as np
 import pandas as pd
+import os
+from pathlib import Path
 from torch.utils.data import DataLoader, TensorDataset
+import datetime
 
 
 class LSTMAutoencoder(nn.Module):
@@ -152,6 +155,45 @@ class MetricDeepAnomalyDetector:
             # If error == threshold, score = 0.5
             scores = 1 / (1 + np.exp(-10 * (latest_error / self.thresholds - 1)))
             return scores
+
+    def save(self, path: str) -> None:
+        """Persist the LSTM AE model weights and thresholds."""
+        out = Path(path)
+        out.mkdir(parents=True, exist_ok=True)
+
+        torch.save(self.model.state_dict(), str(out / "lstm_ae_weights.pt"))
+
+        meta = {
+            "thresholds": self.thresholds,
+            "sequence_length": self.sequence_length,
+            "num_features": self.model.num_features,
+            "saved_at": datetime.datetime.now().isoformat(),
+        }
+        np.save(str(out / "lstm_ae_meta.npy"), meta, allow_pickle=True)
+
+    def load(self, path: str) -> None:
+        """Load a previously saved LSTM AE model."""
+        src = Path(path)
+        if not src.exists():
+            raise FileNotFoundError(f"Model directory not found: {src}")
+
+        weights_path = src / "lstm_ae_weights.pt"
+        if not weights_path.exists():
+            raise FileNotFoundError(f"Weights file not found: {weights_path}")
+
+        meta_path = src / "lstm_ae_meta.npy"
+        if meta_path.exists():
+            meta = np.load(str(meta_path), allow_pickle=True).item()
+            self.thresholds = meta.get("thresholds")
+            self.sequence_length = int(meta.get("sequence_length", 60))
+            num_features = int(meta.get("num_features", self.model.num_features))
+        else:
+            num_features = self.model.num_features
+
+        self.model.load_state_dict(
+            torch.load(str(weights_path), map_location=self.device)
+        )
+        self.model.eval()
 
 
 if __name__ == "__main__":

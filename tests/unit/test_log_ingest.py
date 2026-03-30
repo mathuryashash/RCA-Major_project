@@ -13,17 +13,12 @@ from tests.conftest import SAMPLE_PLAINTEXT_LOGS, SAMPLE_SYSLOG_LINES
 
 
 def _make_handler(tmp_dir, fmt="plaintext"):
-    """Create a LogHandler with a dummy source_config pointing at a temp file."""
+    """Create a LogHandler with a dummy source pointing at a temp file."""
     dummy_log = os.path.join(tmp_dir, "test.log")
-    # LogHandler.__init__ calls _get_file_size, which needs the path to exist
     with open(dummy_log, "w") as f:
         f.write("")
-    source_config = {
-        "label": f"test-{fmt}",
-        "path": dummy_log,
-        "format": fmt,
-    }
-    return LogHandler(source_config)
+    label = f"test-{fmt}"
+    return LogHandler(label=label, path=dummy_log, log_format=fmt)
 
 
 @pytest.mark.unit

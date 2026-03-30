@@ -195,7 +195,21 @@ class TestMetricIngestionService:
                 "scrape_interval_seconds": 60,
             }
         }
-        svc = MetricIngestionService(config)
+        with (
+            patch(
+                "src.ingestion.timescaledb_store.psycopg2.connect",
+                side_effect=Exception("Connection refused"),
+            ),
+            patch(
+                "src.ingestion.redis_buffer.redis.Redis",
+                side_effect=Exception("Connection refused"),
+            ),
+            patch(
+                "socket.getaddrinfo",
+                side_effect=OSError("Name resolution failed"),
+            ),
+        ):
+            svc = MetricIngestionService(config)
         points = svc.load_csv_metrics(csv_path)
 
         assert len(points) == 2
@@ -212,7 +226,21 @@ class TestMetricIngestionService:
                 "scrape_interval_seconds": 60,
             }
         }
-        svc = MetricIngestionService(config)
+        with (
+            patch(
+                "src.ingestion.timescaledb_store.psycopg2.connect",
+                side_effect=Exception("Connection refused"),
+            ),
+            patch(
+                "src.ingestion.redis_buffer.redis.Redis",
+                side_effect=Exception("Connection refused"),
+            ),
+            patch(
+                "socket.getaddrinfo",
+                side_effect=OSError("Name resolution failed"),
+            ),
+        ):
+            svc = MetricIngestionService(config)
         result = svc.load_csv_metrics(os.path.join(tmp_dir, "nonexistent.csv"))
         assert result == []
 
@@ -226,15 +254,19 @@ class TestMetricIngestionService:
 class TestRedisBuffer:
     def test_redis_buffer_graceful_degradation(self):
         """RedisBuffer does not crash when Redis is unavailable."""
-        # Patch redis.Redis to raise on connect so the buffer falls back
         if REDIS_AVAILABLE:
-            with patch(
-                "src.ingestion.redis_buffer.redis.Redis",
-                side_effect=Exception("Connection refused"),
+            with (
+                patch(
+                    "src.ingestion.redis_buffer.redis.Redis",
+                    side_effect=Exception("Connection refused"),
+                ),
+                patch(
+                    "socket.getaddrinfo",
+                    side_effect=OSError("Name resolution failed"),
+                ),
             ):
                 buf = RedisBuffer(host="unreachable", port=9999)
         else:
-            # redis package not installed — constructor itself is a no-op
             buf = RedisBuffer(host="unreachable", port=9999)
 
         assert buf.health_check() is False

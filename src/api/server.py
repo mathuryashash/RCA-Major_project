@@ -30,11 +30,33 @@ from enum import Enum
 from typing import List, Dict, Optional, Any
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.responses import JSONResponse
 
 from src.pipeline import PipelineOrchestrator
+from src.api.auth import (
+    authenticate_user,
+    create_access_token,
+    create_refresh_token,
+    get_current_active_user,
+    get_user,
+    verify_token,
+    Token,
+    User,
+)
+from src.api.exceptions import (
+    RCAException,
+    IncidentNotFoundError,
+    PipelineError,
+    ModelLoadError,
+)
+from src.api.errors import ErrorResponse
+from src.api.webhooks import get_webhook_validator
+
+PRODUCTION = os.environ.get("PRODUCTION", "false").lower() == "true"
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -60,6 +82,83 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Exception handlers
+# ---------------------------------------------------------------------------
+
+
+@app.exception_handler(RCAException)
+async def rca_exception_handler(request: Request, exc: RCAException):
+    logger.warning(f"RCA error: {exc.code} - {exc.message}")
+    return JSONResponse(
+        status_code=400,
+        content=ErrorResponse(
+            error=exc.message if not PRODUCTION else "An error occurred",
+            code=exc.code,
+            details={"incident_id": exc.incident_id}
+            if hasattr(exc, "incident_id")
+            else None,
+            timestamp=datetime.now().isoformat(),
+        ).model_dump(),
+    )
+
+
+@app.exception_handler(IncidentNotFoundError)
+async def incident_not_found_handler(request: Request, exc: IncidentNotFoundError):
+    logger.warning(f"Incident not found: {exc.incident_id}")
+    return JSONResponse(
+        status_code=404,
+        content=ErrorResponse(
+            error=exc.message,
+            code=exc.code,
+            details={"incident_id": exc.incident_id},
+            timestamp=datetime.now().isoformat(),
+        ).model_dump(),
+    )
+
+
+@app.exception_handler(PipelineError)
+async def pipeline_error_handler(request: Request, exc: PipelineError):
+    logger.error(f"Pipeline error in stage '{exc.stage}': {exc.message}")
+    return JSONResponse(
+        status_code=500,
+        content=ErrorResponse(
+            error=exc.message if not PRODUCTION else "Pipeline execution failed",
+            code=exc.code,
+            details={"stage": exc.stage} if not PRODUCTION else None,
+            timestamp=datetime.now().isoformat(),
+        ).model_dump(),
+    )
+
+
+@app.exception_handler(ModelLoadError)
+async def model_load_error_handler(request: Request, exc: ModelLoadError):
+    logger.error(f"Model load error: {exc.model_name}")
+    return JSONResponse(
+        status_code=500,
+        content=ErrorResponse(
+            error=exc.message if not PRODUCTION else "Failed to load analysis model",
+            code=exc.code,
+            details={"model_name": exc.model_name} if not PRODUCTION else None,
+            timestamp=datetime.now().isoformat(),
+        ).model_dump(),
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled exception")
+    return JSONResponse(
+        status_code=500,
+        content=ErrorResponse(
+            error="Internal server error" if PRODUCTION else str(exc),
+            code="INTERNAL_ERROR",
+            timestamp=datetime.now().isoformat(),
+        ).model_dump(),
+    )
+
 
 # Pipeline singleton — expensive to init (loads Drain3, TF-IDF, etc.)
 pipeline = PipelineOrchestrator()
@@ -163,6 +262,8 @@ def _run_pipeline(incident_id: str, inquiry: RCAInquiry) -> None:
         )
         incidents[incident_id] = report
         logger.info("Pipeline completed for %s", incident_id)
+    except PipelineError:
+        raise
     except Exception as exc:
         logger.exception("Pipeline failed for %s", incident_id)
         incidents[incident_id] = {
@@ -171,12 +272,13 @@ def _run_pipeline(incident_id: str, inquiry: RCAInquiry) -> None:
             "error": str(exc),
             "detected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
+        raise PipelineError(str(exc), stage="full_analysis") from exc
 
 
 def _require_incident(incident_id: str) -> Dict[str, Any]:
     """Helper: return incident data or raise 404."""
     if incident_id not in incidents:
-        raise HTTPException(status_code=404, detail="Incident not found")
+        raise IncidentNotFoundError(incident_id)
     return incidents[incident_id]
 
 
@@ -189,10 +291,8 @@ def _require_complete_incident(incident_id: str) -> Dict[str, Any]:
             detail="Analysis still in progress. Poll /report/{incident_id} for status.",
         )
     if data.get("status") == "failed":
-        raise HTTPException(
-            status_code=500,
-            detail=f"Analysis failed: {data.get('error', 'unknown error')}",
-        )
+        error_msg = data.get("error", "unknown error")
+        raise PipelineError(error_msg, stage="full_analysis")
     return data
 
 
@@ -214,6 +314,63 @@ def health():
     """
     System health: models loaded, log files accessible, data freshness.
     Includes parse_failures counter (FR-03).
+    """
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "0.3.0",
+    }
+
+
+@app.post("/auth/login", response_model=Token)
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """
+    OAuth2 compatible token login. Returns access and refresh tokens.
+    """
+    user = authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token = create_access_token(
+        data={"sub": user.username, "scopes": user.scopes}
+    )
+    refresh_token = create_refresh_token(data={"sub": user.username})
+    return Token(access_token=access_token, refresh_token=refresh_token)
+
+
+@app.post("/auth/refresh", response_model=Token)
+async def refresh(refresh_token: str):
+    """
+    Refresh access token using a valid refresh token.
+    """
+    payload = verify_token(refresh_token, token_type="refresh")
+    username = payload.get("sub")
+    if username is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
+        )
+    user = get_user(username)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
+    access_token = create_access_token(
+        data={"sub": user.username, "scopes": user.scopes}
+    )
+    new_refresh_token = create_refresh_token(data={"sub": user.username})
+    return Token(access_token=access_token, refresh_token=new_refresh_token)
+
+
+@app.get("/health/detailed")
+def health_detailed(current_user: User = Depends(get_current_active_user)):
+    """
+    Detailed system health: models loaded, log files accessible, data freshness.
+    Includes parse_failures counter (FR-03). Requires authentication.
     """
     # Check log file accessibility
     log_sources = pipeline.config.get("log_sources", [])
@@ -256,8 +413,16 @@ def health():
 
 
 @app.post("/events/deploy", status_code=202)
-def ingest_deploy_event(event: DeployEvent):
+async def ingest_deploy_event(
+    event: DeployEvent,
+    request: Request,
+    current_user: User = Depends(get_current_active_user),
+):
     """Record a deployment event from CI/CD. Correlated with anomalies within +/-30 min."""
+    webhook_validator = get_webhook_validator()
+    body = await request.body()
+    webhook_validator.require_valid_webhook(request, body)
+
     event_id = f"EVT-{uuid4().hex[:12]}"
     record = {
         "event_id": event_id,
@@ -277,8 +442,16 @@ def ingest_deploy_event(event: DeployEvent):
 
 
 @app.post("/events/config", status_code=202)
-def ingest_config_event(event: ConfigChangeEvent):
+async def ingest_config_event(
+    event: ConfigChangeEvent,
+    request: Request,
+    current_user: User = Depends(get_current_active_user),
+):
     """Record a configuration change event. Correlated with anomalies within +/-30 min."""
+    webhook_validator = get_webhook_validator()
+    body = await request.body()
+    webhook_validator.require_valid_webhook(request, body)
+
     event_id = f"EVT-{uuid4().hex[:12]}"
     record = {
         "event_id": event_id,
@@ -298,7 +471,7 @@ def ingest_config_event(event: ConfigChangeEvent):
 
 
 @app.get("/events")
-def list_events():
+def list_events(current_user: User = Depends(get_current_active_user)):
     """Return all stored deploy and config events (debug/inspection)."""
     all_events = sorted(
         [*deploy_events, *config_events],
@@ -314,7 +487,10 @@ def list_events():
 
 
 @app.get("/events/{incident_id}")
-def get_events_for_incident(incident_id: str):
+def get_events_for_incident(
+    incident_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     Return deploy/config events within +/-30 minutes of the incident's detected_at.
 
@@ -370,7 +546,10 @@ def get_events_for_incident(incident_id: str):
 
 
 @app.post("/analyze", status_code=202, response_model=AnalyzeResponse)
-async def analyze(inquiry: RCAInquiry):
+async def analyze(
+    inquiry: RCAInquiry,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     Kick off an RCA analysis.
 
@@ -413,7 +592,10 @@ async def analyze(inquiry: RCAInquiry):
 
 
 @app.get("/report/{incident_id}")
-def get_report(incident_id: str):
+def get_report(
+    incident_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """Retrieve the full analysis report for a given incident."""
     return _require_incident(incident_id)
 
@@ -422,7 +604,7 @@ def get_report(incident_id: str):
 
 
 @app.get("/incidents")
-def list_incidents():
+def list_incidents(current_user: User = Depends(get_current_active_user)):
     """List all incidents with their status."""
     return [
         {
@@ -440,7 +622,12 @@ def list_incidents():
 
 
 @app.get("/logs/{incident_id}")
-def get_logs(incident_id: str, source: Optional[str] = None, min_score: float = 0.0):
+def get_logs(
+    incident_id: str,
+    source: Optional[str] = None,
+    min_score: float = 0.0,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     Return annotated log lines around the incident window,
     sorted by anomaly contribution (descending).
@@ -469,7 +656,11 @@ def get_logs(incident_id: str, source: Optional[str] = None, min_score: float = 
 
 
 @app.get("/metrics/{service}")
-def get_metrics(service: str, incident_id: Optional[str] = None):
+def get_metrics(
+    service: str,
+    incident_id: Optional[str] = None,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     Last 60-minute anomaly score time series for a service.
 
@@ -540,7 +731,10 @@ def get_metrics(service: str, incident_id: Optional[str] = None):
 
 
 @app.get("/graph/{incident_id}")
-def get_graph(incident_id: str):
+def get_graph(
+    incident_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     Return the causal DAG as D3.js-compatible node-link JSON.
 
@@ -595,7 +789,10 @@ def get_graph(incident_id: str):
 
 
 @app.post("/remediate/{incident_id}", status_code=202)
-def trigger_remediation(incident_id: str):
+def trigger_remediation(
+    incident_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     Trigger the Remediation Engine for an incident.
     Returns the safety-classified action plan.
@@ -661,7 +858,11 @@ def trigger_remediation(incident_id: str):
 
 
 @app.post("/remediate/{incident_id}/execute")
-def execute_tier1(incident_id: str, request: ExecuteRequest):
+def execute_tier1(
+    incident_id: str,
+    request: ExecuteRequest,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     Confirm and execute pending Tier 1 auto-fix actions.
 
@@ -727,7 +928,10 @@ def execute_tier1(incident_id: str, request: ExecuteRequest):
 
 
 @app.get("/remediate/{incident_id}/walkthrough")
-def get_walkthrough(incident_id: str):
+def get_walkthrough(
+    incident_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     Full step-by-step Tier 2 walkthrough with commands.
     Each step includes: step number, title, command, expected output,
@@ -751,7 +955,10 @@ def get_walkthrough(incident_id: str):
 
 
 @app.get("/remediate/{incident_id}/prevention")
-def get_prevention(incident_id: str):
+def get_prevention(
+    incident_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     Long-term prevention checklist by horizon:
     immediate, short_term, long_term.
@@ -774,7 +981,10 @@ def get_prevention(incident_id: str):
 
 
 @app.get("/audit/{incident_id}")
-def get_audit(incident_id: str):
+def get_audit(
+    incident_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     Immutable audit log of all remediation actions for an incident.
     Entries include: incident_id, action_type, command_executed,

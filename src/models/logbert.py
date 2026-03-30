@@ -91,6 +91,11 @@ class LogBERTDetector:
         """Whether the model has been fine-tuned on a log corpus."""
         return self._trained
 
+    @property
+    def is_loaded(self) -> bool:
+        """Whether a checkpoint has been loaded."""
+        return getattr(self, "_loaded", False)
+
     # ------------------------------------------------------------------
     # Training
     # ------------------------------------------------------------------
@@ -245,14 +250,17 @@ class LogBERTDetector:
         self.model.save_pretrained(str(out))
         self.tokenizer.save_pretrained(str(out))
 
-        # Save detector metadata
+        import datetime
+
         meta = {
             "threshold": self._threshold,
             "trained": self._trained,
             "max_seq_length": self.max_seq_length,
             "loss_history": self._loss_history,
+            "saved_at": datetime.datetime.now().isoformat(),
         }
-        np.save(str(out / "logbert_meta.npy"), meta)
+        np.save(str(out / "logbert_meta.npy"), meta, allow_pickle=True)
+        self._loaded = True
         logger.info("LogBERTDetector saved to %s", out)
 
     def load(self, path: str) -> None:
@@ -273,10 +281,10 @@ class LogBERTDetector:
             self.max_seq_length = int(meta.get("max_seq_length", 128))
             self._loss_history = list(meta.get("loss_history", []))
         else:
-            # Backwards compat — assume it was trained if we loaded weights
             self._trained = True
             self._threshold = 1.0
 
+        self._loaded = True
         logger.info("LogBERTDetector loaded from %s (trained=%s)", src, self._trained)
 
     # ------------------------------------------------------------------

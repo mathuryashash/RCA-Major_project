@@ -22,7 +22,8 @@ import re
 import logging
 import numpy as np
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from src.preprocessing.log_parser import LogTemplateExtractor
@@ -32,6 +33,7 @@ from src.reporting.nlg_generator import NLGGenerator
 from src.remediation.remediation_engine import RemediationEngine
 from src.common.config import load_config
 from src.models.unified_scorer import UnifiedAnomalyScorer
+from src.api.exceptions import PipelineError, ModelLoadError
 
 # --- Graceful imports for optional heavy modules ---
 
@@ -75,6 +77,13 @@ try:
 except ImportError:
     METRIC_INGEST_AVAILABLE = False
 
+try:
+    from src.ingestion.log_ingest import LogFileWatcher, read_full_file
+
+    LOG_WATCHER_AVAILABLE = True
+except ImportError:
+    LOG_WATCHER_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -111,6 +120,21 @@ class PipelineOrchestrator:
                 "anomaly_threshold", 0.5
             ),
         )
+
+        # --- Log File Watcher (real-time tailing) ---
+        self._log_watcher = None
+        if LOG_WATCHER_AVAILABLE:
+            try:
+                watcher_config = self.config.get("log_watching", {})
+                if watcher_config.get("enabled", False):
+                    poll_interval = watcher_config.get("poll_interval_seconds", 1.0)
+                    max_buffer = watcher_config.get("max_buffer_size", 10000)
+                    self._log_watcher = LogFileWatcher(
+                        poll_interval_seconds=poll_interval, max_buffer_size=max_buffer
+                    )
+                    logger.info("LogFileWatcher initialized")
+            except Exception as exc:
+                logger.warning("LogFileWatcher init failed: %s", exc)
 
         # --- Optional modules (graceful degradation) ---
 
@@ -163,6 +187,70 @@ class PipelineOrchestrator:
         self._syslog_re = re.compile(
             r"^(\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}) (\S+) (\S+): (.+)$"
         )
+
+        self._checkpoint_loaded = False
+        self._load_model_checkpoints()
+
+    def _is_checkpoint_recent(self, checkpoint_path: str) -> bool:
+        """Check if checkpoint is within max age days."""
+        cache_enabled = self.config.get("models", {}).get("cache_checkpoints", True)
+        if not cache_enabled:
+            return False
+
+        max_age_days = self.config.get("models", {}).get("checkpoint_max_age_days", 7)
+        checkpoint_dir = Path(checkpoint_path)
+
+        if not checkpoint_dir.exists():
+            return False
+
+        meta_file = checkpoint_dir / "logbert_meta.npy"
+        if meta_file.exists():
+            try:
+                meta = np.load(str(meta_file), allow_pickle=True).item()
+                saved_at = meta.get("saved_at")
+                if saved_at:
+                    saved_time = datetime.fromisoformat(saved_at)
+                    age = datetime.now() - saved_time
+                    return age < timedelta(days=max_age_days)
+            except Exception:
+                pass
+        return False
+
+    def _load_model_checkpoints(self) -> None:
+        """Load models from checkpoints if available and recent."""
+        if self._checkpoint_loaded:
+            return
+
+        cache_enabled = self.config.get("models", {}).get("cache_checkpoints", True)
+        if not cache_enabled:
+            logger.info("Checkpoint loading disabled in config")
+            return
+
+        checkpoint_base = self.config.get("models", {}).get(
+            "checkpoint_dir", "./data/models"
+        )
+
+        logbert_path = os.path.join(checkpoint_base, "logbert")
+        if os.path.exists(logbert_path) and self.logbert is not None:
+            if self._is_checkpoint_recent(logbert_path):
+                try:
+                    self.logbert.load(logbert_path)
+                    logger.info("Loaded LogBERT from checkpoint: %s", logbert_path)
+                except Exception as exc:
+                    logger.warning("Failed to load LogBERT checkpoint: %s", exc)
+            else:
+                logger.info("LogBERT checkpoint too old, will retrain")
+
+        if LSTM_AE_AVAILABLE and self.lstm_ae is not None:
+            lstm_path = os.path.join(checkpoint_base, "lstm_ae")
+            if os.path.exists(lstm_path):
+                try:
+                    self.lstm_ae.load(lstm_path)
+                    logger.info("Loaded LSTM AE from checkpoint: %s", lstm_path)
+                except Exception as exc:
+                    logger.warning("Failed to load LSTM AE checkpoint: %s", exc)
+
+        self._checkpoint_loaded = True
 
     # ------------------------------------------------------------------
     # 1. LOG READING
@@ -236,6 +324,57 @@ class PipelineOrchestrator:
             logger.info("Read %d records from %s", len(records), label)
 
         return all_logs
+
+    def start_log_watcher(self) -> bool:
+        """
+        Start the real-time log file watcher.
+
+        Returns:
+            True if watcher started successfully, False otherwise.
+        """
+        if self._log_watcher is None:
+            logger.warning("LogFileWatcher not available")
+            return False
+
+        try:
+            sources = self.config.get("log_sources", [])
+            self._log_watcher.start(sources)
+            logger.info("LogFileWatcher started")
+            return True
+        except Exception as exc:
+            logger.warning("Failed to start LogFileWatcher: %s", exc)
+            return False
+
+    def stop_log_watcher(self) -> None:
+        """Stop the real-time log file watcher."""
+        if self._log_watcher is not None:
+            self._log_watcher.stop()
+            logger.info("LogFileWatcher stopped")
+
+    def get_new_logs(self) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get new log lines since last read from all watched files.
+
+        Returns:
+            Dict mapping label -> list of parsed log records.
+        """
+        if self._log_watcher is None:
+            return {}
+
+        return self._log_watcher.get_new_lines()
+
+    def read_full_file(self, path: str, fmt: str) -> List[Dict[str, Any]]:
+        """
+        Read entire log file at once (backward compatible).
+
+        Args:
+            path: Path to log file
+            fmt: Log format (json, plaintext, syslog)
+
+        Returns:
+            List of parsed log records
+        """
+        return self._read_log_file(path, fmt)
 
     # ------------------------------------------------------------------
     # 1B. METRIC READING
@@ -837,7 +976,10 @@ class PipelineOrchestrator:
         logger.info("Pipeline run started for %s", incident_id)
 
         # --- Stage 1A: Read logs ---
-        all_logs = self._read_all_logs()
+        try:
+            all_logs = self._read_all_logs()
+        except Exception as exc:
+            raise PipelineError(str(exc), stage="log_ingestion") from exc
 
         # Filter by requested services if provided
         if services:
@@ -854,7 +996,10 @@ class PipelineOrchestrator:
             logger.warning("Metric reading failed, continuing log-only: %s", exc)
 
         # --- Stage 2A: Template extraction ---
-        all_logs = self._extract_templates(all_logs)
+        try:
+            all_logs = self._extract_templates(all_logs)
+        except Exception as exc:
+            raise PipelineError(str(exc), stage="template_extraction") from exc
 
         # --- Stage 2B: Preprocess metrics (optional) ---
         preprocessed_metrics = None
@@ -866,7 +1011,10 @@ class PipelineOrchestrator:
                 preprocessed_metrics = metric_df
 
         # --- Stage 3A: Log anomaly detection (TF-IDF + LogBERT ensemble) ---
-        anomaly_scores = self._detect_log_anomalies_enhanced(all_logs)
+        try:
+            anomaly_scores = self._detect_log_anomalies_enhanced(all_logs)
+        except Exception as exc:
+            raise PipelineError(str(exc), stage="log_anomaly_detection") from exc
         logger.info("Log anomaly scores: %s", anomaly_scores)
 
         # --- Stage 3B: Metric anomaly detection (LSTM AE + Transformer) ---
@@ -905,9 +1053,12 @@ class PipelineOrchestrator:
             )
 
         # --- Stage 5: Causal graph construction (Granger + FDR + PC) ---
-        graph = self.causal_engine.build_causal_graph(
-            signals_df, use_pc=True, use_fdr=True
-        )
+        try:
+            graph = self.causal_engine.build_causal_graph(
+                signals_df, use_pc=True, use_fdr=True
+            )
+        except Exception as exc:
+            raise PipelineError(str(exc), stage="causal_graph_construction") from exc
         logger.info(
             "Causal graph: %d nodes, %d edges", len(graph.nodes), len(graph.edges)
         )
@@ -931,51 +1082,50 @@ class PipelineOrchestrator:
                 logger.warning("KHBN refinement failed: %s", exc)
 
         # --- Stage 7: 5-factor RCA scoring ---
-        # Build temporal_order from log record ordering
-        temporal_order = sorted(
-            all_anomaly_scores.keys(),
-            key=lambda k: all_anomaly_scores.get(k, 0.0),
-            reverse=True,
-        )
+        try:
+            temporal_order = sorted(
+                all_anomaly_scores.keys(),
+                key=lambda k: all_anomaly_scores.get(k, 0.0),
+                reverse=True,
+            )
 
-        # Build rarity_priors from unified scorer log-level weights
-        rarity_priors: Dict[str, float] = {}
-        for label, records in all_logs.items():
-            levels = [r.get("level", "INFO") for r in records]
-            if levels:
-                level_scores = [
-                    self.unified_scorer.LOG_LEVEL_WEIGHTS.get(lv.upper(), 0.2)
-                    for lv in levels
-                ]
-                rarity_priors[label] = float(np.mean(level_scores))
-            else:
-                rarity_priors[label] = 0.2
-        # Metric rarity priors default to 0.3
-        for metric_name in metric_anomaly_scores:
-            if metric_name not in rarity_priors:
-                rarity_priors[metric_name] = 0.3
+            rarity_priors: Dict[str, float] = {}
+            for label, records in all_logs.items():
+                levels = [r.get("level", "INFO") for r in records]
+                if levels:
+                    level_scores = [
+                        self.unified_scorer.LOG_LEVEL_WEIGHTS.get(lv.upper(), 0.2)
+                        for lv in levels
+                    ]
+                    rarity_priors[label] = float(np.mean(level_scores))
+                else:
+                    rarity_priors[label] = 0.2
+            for metric_name in metric_anomaly_scores:
+                if metric_name not in rarity_priors:
+                    rarity_priors[metric_name] = 0.3
 
-        # Build event_metadata
-        event_metadata: Dict[str, Dict[str, Any]] = {}
-        for label, records in all_logs.items():
-            levels = [r.get("level", "INFO") for r in records]
-            worst_level = "INFO"
-            for lv in ["CRITICAL", "FATAL", "ERROR", "WARN", "WARNING"]:
-                if lv in [l.upper() for l in levels]:
-                    worst_level = lv
-                    break
-            event_metadata[label] = {
-                "log_level": worst_level,
-                "metric_score": metric_anomaly_scores.get(label, 0.0),
-            }
+            event_metadata: Dict[str, Dict[str, Any]] = {}
+            for label, records in all_logs.items():
+                levels = [r.get("level", "INFO") for r in records]
+                worst_level = "INFO"
+                for lv in ["CRITICAL", "FATAL", "ERROR", "WARN", "WARNING"]:
+                    if lv in [l.upper() for l in levels]:
+                        worst_level = lv
+                        break
+                event_metadata[label] = {
+                    "log_level": worst_level,
+                    "metric_score": metric_anomaly_scores.get(label, 0.0),
+                }
 
-        ranks = self.causal_engine.rank_root_causes(
-            graph,
-            anomaly_scores=all_anomaly_scores,
-            temporal_order=temporal_order,
-            rarity_priors=rarity_priors,
-            event_metadata=event_metadata,
-        )
+            ranks = self.causal_engine.rank_root_causes(
+                graph,
+                anomaly_scores=all_anomaly_scores,
+                temporal_order=temporal_order,
+                rarity_priors=rarity_priors,
+                event_metadata=event_metadata,
+            )
+        except Exception as exc:
+            raise PipelineError(str(exc), stage="rca_scoring") from exc
 
         # --- Stage 8: Determine top root cause ---
         top_cause = (
@@ -1052,7 +1202,15 @@ class PipelineOrchestrator:
         }
 
         # --- Stage 11: Generate NLG narrative ---
-        report_data["narrative"] = self.nlg_generator.generate_narrative(report_data)
+        try:
+            report_data["narrative"] = self.nlg_generator.generate_narrative(
+                report_data
+            )
+        except Exception as exc:
+            logger.warning("NLG narrative generation failed: %s", exc)
+            report_data["narrative"] = (
+                f"# RCA Report\n\n**Incident:** {incident_id}\n\nAn error occurred during narrative generation."
+            )
 
         # --- Build annotated log lines for /logs endpoint ---
         annotated_logs = []

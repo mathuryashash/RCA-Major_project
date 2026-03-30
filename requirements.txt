@@ -1,5 +1,8 @@
 watchdog==4.0.0
 PyYAML==6.0.1
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.9
 drain3==0.9.11
 pandas==2.2.1
 numpy==1.26.4

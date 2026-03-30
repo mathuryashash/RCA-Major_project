@@ -165,30 +165,52 @@ class TestEndToEndRCA:
         yield
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
+    @pytest.fixture(autouse=True, scope="class")
+    def shared_orchestrator(self):
+        """Create PipelineOrchestrator once per class to avoid repeated model loading."""
+        pipeline = PipelineOrchestrator()
+        yield pipeline
+        pipeline.log_watcher = None
+        pipeline.lstm_ae = None
+        pipeline.temporal_transformer = None
+
+    def _run(self, orchestrator, config_path, incident_id):
+        with open(config_path, "r", encoding="utf-8") as f:
+            orchestrator.config = yaml.safe_load(f)
+        from src.models.causal_inference import CausalInferenceEngine
+
+        orchestrator.causal_engine = CausalInferenceEngine(
+            max_lag=orchestrator.config.get("causal_inference", {}).get("lags", 6),
+            alpha=orchestrator.config.get("causal_inference", {}).get(
+                "fdr_alpha", 0.05
+            ),
+        )
+        return orchestrator.run(incident_id=incident_id)
+
     @pytest.mark.parametrize("scenario", E2E_SCENARIOS)
-    def test_pipeline_returns_result(self, scenario):
+    def test_pipeline_returns_result(self, scenario, shared_orchestrator):
         """Pipeline runs to completion for each scenario."""
         config_path, _ = _generate_scenario(scenario, self.tmp_dir, seed=42)
-        result = _run_pipeline_for_scenario(config_path, f"INC-E2E-{scenario}")
+        result = self._run(shared_orchestrator, config_path, f"INC-E2E-{scenario}")
         assert isinstance(result, dict), "Pipeline should return a dict"
         assert (
             result.get("status") == "complete" or result.get("root_cause") is not None
         )
 
     @pytest.mark.parametrize("scenario", E2E_SCENARIOS)
-    def test_root_cause_detected(self, scenario):
+    def test_root_cause_detected(self, scenario, shared_orchestrator):
         """Pipeline identifies a non-null root cause."""
         config_path, _ = _generate_scenario(scenario, self.tmp_dir, seed=42)
-        result = _run_pipeline_for_scenario(config_path, f"INC-E2E-{scenario}")
+        result = self._run(shared_orchestrator, config_path, f"INC-E2E-{scenario}")
         assert result.get("root_cause") is not None, (
             f"Pipeline should detect a root cause for {scenario}"
         )
 
     @pytest.mark.parametrize("scenario", E2E_SCENARIOS)
-    def test_remediation_plan_present(self, scenario):
+    def test_remediation_plan_present(self, scenario, shared_orchestrator):
         """Pipeline produces a remediation plan for each scenario."""
         config_path, _ = _generate_scenario(scenario, self.tmp_dir, seed=42)
-        result = _run_pipeline_for_scenario(config_path, f"INC-E2E-{scenario}")
+        result = self._run(shared_orchestrator, config_path, f"INC-E2E-{scenario}")
         plan = result.get("remediation_plan", {})
         # A remediation plan should at least have the root_cause key
         assert "root_cause" in plan or "confidence_gate" in plan, (
@@ -196,36 +218,36 @@ class TestEndToEndRCA:
         )
 
     @pytest.mark.parametrize("scenario", E2E_SCENARIOS)
-    def test_narrative_generated(self, scenario):
+    def test_narrative_generated(self, scenario, shared_orchestrator):
         """Pipeline generates an NLG narrative."""
         config_path, _ = _generate_scenario(scenario, self.tmp_dir, seed=42)
-        result = _run_pipeline_for_scenario(config_path, f"INC-E2E-{scenario}")
+        result = self._run(shared_orchestrator, config_path, f"INC-E2E-{scenario}")
         narrative = result.get("narrative", "")
         assert len(narrative) > 50, (
             f"Narrative should be substantial, got {len(narrative)} chars"
         )
 
     @pytest.mark.parametrize("scenario", E2E_SCENARIOS)
-    def test_causal_graph_has_nodes(self, scenario):
+    def test_causal_graph_has_nodes(self, scenario, shared_orchestrator):
         """Pipeline produces a causal graph with at least 1 node."""
         config_path, _ = _generate_scenario(scenario, self.tmp_dir, seed=42)
-        result = _run_pipeline_for_scenario(config_path, f"INC-E2E-{scenario}")
+        result = self._run(shared_orchestrator, config_path, f"INC-E2E-{scenario}")
         graph = result.get("causal_graph", {})
         nodes = graph.get("nodes", [])
         # Pipeline should identify at least the anomalous sources
         assert len(nodes) >= 1, f"Causal graph should have nodes for {scenario}"
 
     @pytest.mark.parametrize("scenario", E2E_SCENARIOS)
-    def test_evidence_collected(self, scenario):
+    def test_evidence_collected(self, scenario, shared_orchestrator):
         """Pipeline collects evidence entries."""
         config_path, _ = _generate_scenario(scenario, self.tmp_dir, seed=42)
-        result = _run_pipeline_for_scenario(config_path, f"INC-E2E-{scenario}")
+        result = self._run(shared_orchestrator, config_path, f"INC-E2E-{scenario}")
         evidence = result.get("evidence", [])
         assert len(evidence) >= 1, (
             f"Should have at least 1 evidence entry for {scenario}"
         )
 
-    def test_top1_accuracy_across_scenarios(self):
+    def test_top1_accuracy_across_scenarios(self, shared_orchestrator):
         """
         PRD NFR-08: Top-1 root cause identification accuracy >70%.
 
@@ -247,7 +269,9 @@ class TestEndToEndRCA:
             tmp = tempfile.mkdtemp(prefix=f"rca_{scenario}_")
             try:
                 config_path, labels = _generate_scenario(scenario, tmp, seed=42)
-                result = _run_pipeline_for_scenario(config_path, f"INC-ACC-{scenario}")
+                result = self._run(
+                    shared_orchestrator, config_path, f"INC-ACC-{scenario}"
+                )
 
                 root_cause = result.get("root_cause")
                 if root_cause is None:
@@ -255,9 +279,7 @@ class TestEndToEndRCA:
                     details.append(f"  {scenario}: no root cause detected")
                     continue
 
-                # Normalize root cause through the mapping
-                pipeline = PipelineOrchestrator()
-                mapped_key = pipeline._map_to_remediation_key(root_cause)
+                mapped_key = shared_orchestrator._map_to_remediation_key(root_cause)
                 expected_key = SCENARIO_EXPECTED_KEY[scenario]
 
                 total += 1
@@ -273,20 +295,16 @@ class TestEndToEndRCA:
 
         accuracy = top1_correct / total if total > 0 else 0.0
         detail_str = "\n".join(details)
-        # Baseline threshold: pipeline must detect root cause for all scenarios
-        # and correctly map at least some of them. The >70% PRD target requires
-        # LogBERT + PC Algorithm which teammates haven't built yet.
         assert total == len(E2E_SCENARIOS), (
             f"Pipeline should produce results for all {len(E2E_SCENARIOS)} scenarios"
         )
-        # Log accuracy for visibility (no hard threshold on accuracy for baseline)
         print(
             f"\n=== Top-1 Accuracy: {accuracy:.0%} ({top1_correct}/{total}) ===\n"
             f"PRD target: >70% (requires LogBERT + PC Algorithm)\n"
             f"Baseline (TF-IDF + Granger) results:\n{detail_str}"
         )
 
-    def test_top3_accuracy_across_scenarios(self):
+    def test_top3_accuracy_across_scenarios(self, shared_orchestrator):
         """
         PRD NFR-09: Top-3 root cause identification accuracy >88%.
 
@@ -303,7 +321,9 @@ class TestEndToEndRCA:
             tmp = tempfile.mkdtemp(prefix=f"rca_{scenario}_")
             try:
                 config_path, labels = _generate_scenario(scenario, tmp, seed=42)
-                result = _run_pipeline_for_scenario(config_path, f"INC-T3-{scenario}")
+                result = self._run(
+                    shared_orchestrator, config_path, f"INC-T3-{scenario}"
+                )
 
                 ranked = result.get("ranked_causes", [])
                 top3_labels = [r.get("cause", "") for r in ranked[:3]]
@@ -315,11 +335,9 @@ class TestEndToEndRCA:
 
                 expected_key = SCENARIO_EXPECTED_KEY[scenario]
 
-                # Check if any top-3 cause maps to the expected key
-                pipeline = PipelineOrchestrator()
                 found = False
                 for label in top3_labels:
-                    mapped = pipeline._map_to_remediation_key(label)
+                    mapped = shared_orchestrator._map_to_remediation_key(label)
                     if mapped == expected_key:
                         found = True
                         break
@@ -370,30 +388,52 @@ class TestSystemRemediation:
         yield
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
+    @pytest.fixture(autouse=True, scope="class")
+    def cached_result(self):
+        """Run the pipeline once for db_migration and cache the result for all tests."""
+        pipeline = PipelineOrchestrator()
+        tmp = tempfile.mkdtemp(prefix="rca_rem_cached_")
+        try:
+            config_path, _ = _generate_scenario("db_migration", tmp, seed=42)
+            with open(config_path, "r", encoding="utf-8") as f:
+                pipeline.config = yaml.safe_load(f)
+            from src.models.causal_inference import CausalInferenceEngine
+
+            pipeline.causal_engine = CausalInferenceEngine(
+                max_lag=pipeline.config.get("causal_inference", {}).get("lags", 6),
+                alpha=pipeline.config.get("causal_inference", {}).get(
+                    "fdr_alpha", 0.05
+                ),
+            )
+            result = pipeline.run(incident_id="INC-REM-001")
+            pipeline.log_watcher = None
+            pipeline.lstm_ae = None
+            pipeline.temporal_transformer = None
+            return result
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def _run_db_migration_pipeline(self):
         """Generate db_migration logs and run full pipeline."""
         config_path, labels = _generate_scenario("db_migration", self.tmp_dir, seed=42)
         return _run_pipeline_for_scenario(config_path, "INC-REM-001")
 
-    def test_remediation_plan_has_root_cause(self):
+    def test_remediation_plan_has_root_cause(self, cached_result):
         """Remediation plan should identify the root cause."""
-        result = self._run_db_migration_pipeline()
-        plan = result.get("remediation_plan", {})
+        plan = cached_result.get("remediation_plan", {})
         assert "root_cause" in plan
 
-    def test_remediation_has_confidence_gate(self):
+    def test_remediation_has_confidence_gate(self, cached_result):
         """Remediation plan should include confidence gate check."""
-        result = self._run_db_migration_pipeline()
-        plan = result.get("remediation_plan", {})
+        plan = cached_result.get("remediation_plan", {})
         gate = plan.get("confidence_gate", {})
         assert "passed" in gate
         assert "confidence" in gate
         assert "threshold" in gate
 
-    def test_remediation_has_tier1_actions(self):
+    def test_remediation_has_tier1_actions(self, cached_result):
         """Remediation should have Tier 1 auto-execute actions (e.g., cache flush)."""
-        result = self._run_db_migration_pipeline()
-        plan = result.get("remediation_plan", {})
+        plan = cached_result.get("remediation_plan", {})
         tier1 = plan.get("tier1_auto_actions", [])
         assert len(tier1) >= 1, "Should have at least 1 Tier 1 action"
         # Each action should have command and description
@@ -401,10 +441,9 @@ class TestSystemRemediation:
             assert "command" in action, "Tier 1 action must have a command"
             assert "description" in action, "Tier 1 action must have a description"
 
-    def test_remediation_has_tier2_walkthrough(self):
+    def test_remediation_has_tier2_walkthrough(self, cached_result):
         """Remediation should have Tier 2 guided walkthrough with steps."""
-        result = self._run_db_migration_pipeline()
-        plan = result.get("remediation_plan", {})
+        plan = cached_result.get("remediation_plan", {})
         tier2 = plan.get("tier2_walkthrough", {})
         steps = tier2.get("steps", [])
         assert len(steps) >= 1, "Should have at least 1 walkthrough step"
@@ -413,17 +452,15 @@ class TestSystemRemediation:
                 "Each walkthrough step should have a title or description"
             )
 
-    def test_remediation_has_tier3_advisory(self):
+    def test_remediation_has_tier3_advisory(self, cached_result):
         """Remediation should have Tier 3 advisories."""
-        result = self._run_db_migration_pipeline()
-        plan = result.get("remediation_plan", {})
+        plan = cached_result.get("remediation_plan", {})
         tier3 = plan.get("tier3_advisory", [])
         assert len(tier3) >= 1, "Should have at least 1 Tier 3 advisory"
 
-    def test_remediation_has_prevention_checklist(self):
+    def test_remediation_has_prevention_checklist(self, cached_result):
         """Prevention checklist should have immediate, short_term, and long_term horizons."""
-        result = self._run_db_migration_pipeline()
-        plan = result.get("remediation_plan", {})
+        plan = cached_result.get("remediation_plan", {})
         prevention = plan.get("prevention_checklist", {})
         assert "immediate" in prevention, "Missing 'immediate' horizon"
         assert "short_term" in prevention, "Missing 'short_term' horizon"
@@ -439,31 +476,28 @@ class TestSystemRemediation:
             "Long-term prevention should have items"
         )
 
-    def test_tier1_action_has_safety_tier(self):
+    def test_tier1_action_has_safety_tier(self, cached_result):
         """Each Tier 1 action should declare its safety tier."""
-        result = self._run_db_migration_pipeline()
-        plan = result.get("remediation_plan", {})
+        plan = cached_result.get("remediation_plan", {})
         for action in plan.get("tier1_auto_actions", []):
             assert "safety_tier" in action, (
                 "Tier 1 action should have safety_tier field"
             )
 
-    def test_confidence_gate_passes_for_high_confidence(self):
+    def test_confidence_gate_passes_for_high_confidence(self, cached_result):
         """
         When pipeline detects root cause with high confidence,
         the confidence gate should pass.
         """
-        result = self._run_db_migration_pipeline()
-        plan = result.get("remediation_plan", {})
+        plan = cached_result.get("remediation_plan", {})
         gate = plan.get("confidence_gate", {})
         # For synthetically clear failure scenarios, confidence should typically pass
         # (gate threshold is 0.70)
         assert isinstance(gate.get("passed"), bool), "Gate 'passed' should be boolean"
 
-    def test_narrative_mentions_remediation(self):
+    def test_narrative_mentions_remediation(self, cached_result):
         """The NLG narrative should reference recommendations or remediation."""
-        result = self._run_db_migration_pipeline()
-        narrative = result.get("narrative", "").lower()
+        narrative = cached_result.get("narrative", "").lower()
         has_remediation_ref = (
             "recommendation" in narrative
             or "remediation" in narrative
@@ -475,9 +509,8 @@ class TestSystemRemediation:
             "Narrative should mention recommendations/remediation/tiers"
         )
 
-    def test_full_report_structure(self):
+    def test_full_report_structure(self, cached_result):
         """Verify the complete pipeline output has all expected top-level keys."""
-        result = self._run_db_migration_pipeline()
         expected_keys = [
             "incident_id",
             "status",
@@ -488,7 +521,7 @@ class TestSystemRemediation:
             "evidence",
         ]
         for key in expected_keys:
-            assert key in result, f"Missing expected key: {key}"
+            assert key in cached_result, f"Missing expected key: {key}"
 
 
 # ---------------------------------------------------------------------------
@@ -501,14 +534,35 @@ class TestSystemRemediation:
 class TestAllScenariosAccuracy:
     """Run all 10 scenarios and check aggregate accuracy."""
 
-    def test_all_10_scenarios_produce_results(self):
+    @pytest.fixture(autouse=True, scope="class")
+    def orchestrator(self):
+        """Create PipelineOrchestrator once per class to avoid repeated model loading."""
+        pipeline = PipelineOrchestrator()
+        yield pipeline
+        pipeline.log_watcher = None
+        pipeline.lstm_ae = None
+        pipeline.temporal_transformer = None
+
+    def test_all_10_scenarios_produce_results(self, orchestrator):
         """Every one of the 10 scenarios should produce a pipeline result."""
         all_scenarios = list(SCENARIO_EXPECTED_KEY.keys())
         for scenario in all_scenarios:
             tmp = tempfile.mkdtemp(prefix=f"rca_all_{scenario}_")
             try:
                 config_path, _ = _generate_scenario(scenario, tmp, seed=42)
-                result = _run_pipeline_for_scenario(config_path, f"INC-ALL-{scenario}")
+                with open(config_path, "r", encoding="utf-8") as f:
+                    orchestrator.config = yaml.safe_load(f)
+                from src.models.causal_inference import CausalInferenceEngine
+
+                orchestrator.causal_engine = CausalInferenceEngine(
+                    max_lag=orchestrator.config.get("causal_inference", {}).get(
+                        "lags", 6
+                    ),
+                    alpha=orchestrator.config.get("causal_inference", {}).get(
+                        "fdr_alpha", 0.05
+                    ),
+                )
+                result = orchestrator.run(incident_id=f"INC-ALL-{scenario}")
                 assert isinstance(result, dict), f"Result should be dict for {scenario}"
                 assert (
                     result.get("root_cause") is not None

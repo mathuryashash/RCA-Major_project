@@ -17,11 +17,20 @@ Safety classification is deterministic (YAML rules, no ML) for 100% auditability
 
 import os
 import logging
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
 import yaml
 from jinja2 import Template, Environment, FileSystemLoader, BaseLoader
+
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+
+    PSYCOPG2_AVAILABLE = True
+except ImportError:
+    PSYCOPG2_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +49,15 @@ class RemediationEngine:
         self,
         rules_path: str = "config/remediation_rules.yaml",
         safety_path: str = "config/safety_rules.yaml",
+        config_path: str = "config/config.yaml",
     ):
         self.rules_path = self._resolve_path(rules_path)
         self.safety_path = self._resolve_path(safety_path)
+        self.config_path = self._resolve_path(config_path)
 
         self.rules = self._load_yaml(self.rules_path, default={})
         self.safety_config = self._load_yaml(self.safety_path, default={})
+        self.app_config = self._load_yaml(self.config_path, default={})
 
         # Confidence gate threshold (FR-31)
         gate_cfg = self.safety_config.get("confidence_gate", {})
@@ -61,11 +73,121 @@ class RemediationEngine:
         # In-memory audit log (FR-30) — append-only list
         self.audit_log: List[Dict[str, Any]] = []
 
+        # Database configuration for TimescaleDB audit persistence
+        self._db_config = self._load_db_config()
+        self._db_available = self._check_db_connection()
+
         logger.info(
-            "Remediation Engine initialized: %d rule sets, confidence gate=%.2f",
+            "Remediation Engine initialized: %d rule sets, confidence gate=%.2f, DB audit=%s",
             len(self.rules),
             self.confidence_threshold,
+            "enabled" if self._db_available else "disabled",
         )
+
+    def _load_db_config(self) -> Dict[str, Any]:
+        """Load TimescaleDB connection parameters from config.yaml or environment."""
+        db_cfg = self.app_config.get("database", {})
+        return {
+            "host": os.environ.get("RCA_DB_HOST", db_cfg.get("host", "localhost")),
+            "port": int(os.environ.get("RCA_DB_PORT", db_cfg.get("port", 5432))),
+            "user": os.environ.get("RCA_DB_USER", db_cfg.get("user", "postgres")),
+            "password": os.environ.get("RCA_DB_PASSWORD", db_cfg.get("password", "")),
+            "dbname": os.environ.get("RCA_DB_NAME", db_cfg.get("dbname", "rca_system")),
+        }
+
+    def _check_db_connection(self) -> bool:
+        """Check if TimescaleDB connection is available."""
+        if not PSYCOPG2_AVAILABLE:
+            logger.warning("psycopg2 not available — audit persistence disabled")
+            return False
+        try:
+            with self._get_db_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+            return True
+        except Exception as exc:
+            logger.warning(
+                "TimescaleDB unavailable: %s — using in-memory fallback", exc
+            )
+            return False
+
+    @contextmanager
+    def _get_db_connection(self):
+        """Get a database connection using context manager."""
+        if not PSYCOPG2_AVAILABLE:
+            raise RuntimeError("psycopg2 not available")
+        conn = psycopg2.connect(**self._db_config)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _ensure_audit_table(self) -> bool:
+        """Create remediation_audit table if it doesn't exist."""
+        if not self._db_available:
+            return False
+        try:
+            with self._get_db_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS remediation_audit (
+                            id              SERIAL PRIMARY KEY,
+                            incident_id     VARCHAR(255) NOT NULL,
+                            action_type     VARCHAR(255) NOT NULL,
+                            command_executed TEXT,
+                            executor        VARCHAR(255) NOT NULL DEFAULT 'system',
+                            before_state    VARCHAR(500),
+                            after_state     VARCHAR(500),
+                            outcome         VARCHAR(50) NOT NULL DEFAULT 'pending',
+                            timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_remediation_audit_incident 
+                        ON remediation_audit (incident_id, timestamp DESC)
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_remediation_audit_executor 
+                        ON remediation_audit (executor, timestamp DESC)
+                    """)
+                conn.commit()
+            return True
+        except Exception as exc:
+            logger.warning("Failed to ensure audit table: %s", exc)
+            return False
+
+    def _save_audit_to_db(self, entry: Dict[str, Any]) -> bool:
+        """Persist a single audit entry to TimescaleDB."""
+        if not self._db_available:
+            return False
+        try:
+            with self._get_db_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO remediation_audit 
+                        (incident_id, action_type, command_executed, executor, 
+                         before_state, after_state, outcome, timestamp)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                        (
+                            entry["incident_id"],
+                            entry["action_type"],
+                            entry.get("command_executed"),
+                            entry["executor"],
+                            entry.get("before_state"),
+                            entry.get("after_state"),
+                            entry["outcome"],
+                            datetime.fromisoformat(entry["timestamp"])
+                            if isinstance(entry["timestamp"], str)
+                            else entry["timestamp"],
+                        ),
+                    )
+                conn.commit()
+            return True
+        except Exception as exc:
+            logger.warning("DB write failed, using in-memory fallback: %s", exc)
+            return False
 
     # ------------------------------------------------------------------
     # File loading helpers
@@ -379,6 +501,7 @@ class RemediationEngine:
     ) -> Dict[str, Any]:
         """
         Append an entry to the immutable audit log.
+        Persists to TimescaleDB with in-memory fallback.
         Exposed via GET /audit/{incident_id}.
         """
         entry = {
@@ -388,18 +511,63 @@ class RemediationEngine:
             "executor": executor,
             "before_state": before_state,
             "after_state": after_state,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(timezone.utc),
             "outcome": outcome,
         }
+
+        # Always keep in-memory for immediate access
         self.audit_log.append(entry)
+
+        # Persist to TimescaleDB with graceful degradation
+        if not self._save_audit_to_db(entry):
+            logger.warning(
+                "Audit DB write failed for %s/%s — retained in-memory only",
+                incident_id,
+                action_type,
+            )
+
         logger.info("Audit log entry: %s/%s — %s", incident_id, action_type, outcome)
         return entry
 
     def get_audit_log(self, incident_id: str) -> List[Dict[str, Any]]:
-        """Retrieve all audit log entries for a given incident."""
-        return [
+        """
+        Retrieve all audit log entries for a given incident.
+        Reads from TimescaleDB, falls back to in-memory.
+        """
+        if self._db_available:
+            try:
+                with self._get_db_connection() as conn:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute(
+                            """
+                            SELECT incident_id, action_type, command_executed,
+                                   executor, before_state, after_state, outcome, timestamp
+                            FROM remediation_audit
+                            WHERE incident_id = %s
+                            ORDER BY timestamp ASC
+                        """,
+                            (incident_id,),
+                        )
+                        rows = cur.fetchall()
+                        if rows:
+                            entries = []
+                            for row in rows:
+                                entry = dict(row)
+                                if isinstance(entry.get("timestamp"), datetime):
+                                    entry["timestamp"] = entry["timestamp"].isoformat()
+                                entries.append(entry)
+                            return entries
+            except Exception as exc:
+                logger.warning("DB read failed, using in-memory fallback: %s", exc)
+
+        # Fallback to in-memory log
+        entries = [
             entry for entry in self.audit_log if entry["incident_id"] == incident_id
         ]
+        for entry in entries:
+            if isinstance(entry.get("timestamp"), datetime):
+                entry["timestamp"] = entry["timestamp"].isoformat()
+        return entries
 
     # ------------------------------------------------------------------
     # Convenience: legacy-compatible interface

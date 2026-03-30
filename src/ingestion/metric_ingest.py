@@ -12,11 +12,11 @@ from typing import List, Optional
 
 import requests
 
+from src.ingestion.redis_buffer import RedisBuffer
+from src.ingestion.timescaledb_store import TimescaleDBStore
+
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# CloudWatch availability flag
-# ---------------------------------------------------------------------------
 try:
     import boto3
 
@@ -25,9 +25,6 @@ except ImportError:
     CLOUDWATCH_AVAILABLE = False
     logger.info("boto3 not installed — CloudWatch collection disabled")
 
-# ---------------------------------------------------------------------------
-# Default Prometheus queries
-# ---------------------------------------------------------------------------
 DEFAULT_QUERIES = [
     "cpu_usage_percent",
     "memory_usage_mb",
@@ -38,9 +35,6 @@ DEFAULT_QUERIES = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# MetricPoint dataclass
-# ---------------------------------------------------------------------------
 @dataclass
 class MetricPoint:
     """A single time-series metric observation."""
@@ -74,9 +68,6 @@ class MetricPoint:
         )
 
 
-# ---------------------------------------------------------------------------
-# PrometheusCollector
-# ---------------------------------------------------------------------------
 class PrometheusCollector:
     """Scrapes Prometheus /api/v1/query_range for metric time-series."""
 
@@ -84,7 +75,6 @@ class PrometheusCollector:
         self.prometheus_url = prometheus_url.rstrip("/")
         self.scrape_interval = scrape_interval
 
-    # ------------------------------------------------------------------
     def health_check(self) -> bool:
         """Return True if Prometheus is reachable (/-/healthy or /api/v1/status/buildinfo)."""
         try:
@@ -93,7 +83,6 @@ class PrometheusCollector:
         except Exception:
             return False
 
-    # ------------------------------------------------------------------
     def scrape(
         self,
         queries: Optional[List[str]] = None,
@@ -168,9 +157,6 @@ class PrometheusCollector:
         return points
 
 
-# ---------------------------------------------------------------------------
-# CloudWatchCollector
-# ---------------------------------------------------------------------------
 class CloudWatchCollector:
     """Collects metrics from AWS CloudWatch via boto3 GetMetricData.
 
@@ -185,13 +171,11 @@ class CloudWatchCollector:
         if CLOUDWATCH_AVAILABLE:
             try:
                 self._client = boto3.client("cloudwatch")
-                # Quick credential test (list_metrics is very cheap)
                 self._client.list_metrics(Namespace=self.namespaces[0], MaxRecords=1)
             except Exception as exc:
                 logger.warning("CloudWatch client init failed: %s", exc)
                 self._client = None
 
-    # ------------------------------------------------------------------
     def scrape(
         self,
         start: Optional[datetime] = None,
@@ -256,11 +240,8 @@ class CloudWatchCollector:
         return points
 
 
-# ---------------------------------------------------------------------------
-# MetricIngestionService
-# ---------------------------------------------------------------------------
 class MetricIngestionService:
-    """Orchestrates one scrape cycle and CSV-based metric loading."""
+    """Orchestrates one scrape cycle and persists metrics to TimescaleDB with Redis fallback."""
 
     def __init__(self, config: dict):
         metric_cfg = config.get("metric_sources", {})
@@ -270,7 +251,24 @@ class MetricIngestionService:
         )
         self.cloudwatch = CloudWatchCollector()
 
-    # ------------------------------------------------------------------
+        db_cfg = config.get("database", {})
+        self.ts_store = TimescaleDBStore(
+            host=db_cfg.get("host", "localhost"),
+            port=db_cfg.get("port", 5432),
+            user=db_cfg.get("user", "postgres"),
+            password=db_cfg.get("password", "password"),
+            dbname=db_cfg.get("dbname", "rca_system"),
+            batch_size=db_cfg.get("batch_size", 100),
+        )
+
+        redis_cfg = config.get("redis", {})
+        self.redis_buffer = RedisBuffer(
+            host=redis_cfg.get("host", "localhost"),
+            port=redis_cfg.get("port", 6379),
+            stream_name=redis_cfg.get("stream_name", "rca_metrics"),
+            consumer_group=redis_cfg.get("consumer_group", "rca_pipeline"),
+        )
+
     def run_scrape_cycle(self) -> List[MetricPoint]:
         """Run one scrape cycle across all collectors and merge results."""
         points: List[MetricPoint] = []
@@ -279,7 +277,38 @@ class MetricIngestionService:
         logger.info("Scrape cycle collected %d metric points", len(points))
         return points
 
-    # ------------------------------------------------------------------
+    def persist_metrics(self, points: List[MetricPoint]) -> int:
+        """Persist metrics to TimescaleDB, falling back to Redis if unavailable.
+
+        Returns the number of metrics persisted.
+        """
+        if not points:
+            return 0
+
+        if self.ts_store.health_check():
+            written = self.ts_store.write_batch(points)
+            if written > 0:
+                logger.info("Persisted %d metrics to TimescaleDB", written)
+                return written
+
+        pushed = self.redis_buffer.push(points)
+        if pushed > 0:
+            logger.info(
+                "TimescaleDB unavailable — buffered %d metrics in Redis", pushed
+            )
+        return pushed
+
+    def run_cycle(self) -> int:
+        """Run a full scrape + persist cycle. Returns count of persisted metrics."""
+        points = self.run_scrape_cycle()
+        return self.persist_metrics(points)
+
+    def shutdown(self):
+        """Gracefully shutdown the ingestion service."""
+        if hasattr(self, "ts_store"):
+            self.ts_store.close()
+        logger.info("MetricIngestionService shut down")
+
     def load_csv_metrics(self, csv_path: str) -> List[MetricPoint]:
         """Load metrics from a CSV file (for testing / synthetic data).
 
@@ -292,7 +321,6 @@ class MetricIngestionService:
                 for row in reader:
                     ts = row["timestamp"]
                     if isinstance(ts, str):
-                        # Try ISO-8601 first, fall back to common format
                         try:
                             ts = datetime.fromisoformat(ts)
                         except ValueError:
@@ -316,9 +344,6 @@ class MetricIngestionService:
         return points
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 def _infer_unit(metric_name: str) -> str:
     """Best-effort unit inference from the metric name suffix."""
     name = metric_name.lower()

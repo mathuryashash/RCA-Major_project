@@ -11,6 +11,12 @@ log_sources:
     path: ./data/logs/syslog.log
     format: syslog
 
+# Real-time log file watching configuration
+log_watching:
+  enabled: true
+  poll_interval_seconds: 1
+  max_buffer_size: 10000
+
 metric_sources:
   prometheus_url: http://localhost:9090
   scrape_interval_seconds: 60
@@ -41,3 +47,26 @@ redis:
   port: 6379
   stream_name: rca_metrics
   consumer_group: rca_pipeline
+
+# JWT Authentication Settings
+jwt:
+  secret_key: "your-super-secret-key-change-in-production-use-env-var"
+  algorithm: "HS256"
+  access_token_expire_minutes: 30
+  refresh_token_expire_days: 7
+
+# Webhook Configuration
+webhooks:
+  github_secret: "your-github-webhook-secret"
+  gitlab_token: "your-gitlab-token"
+  validate_signatures: true
+
+# Model Checkpoint Settings
+models:
+  cache_checkpoints: true
+  checkpoint_max_age_days: 7
+  checkpoint_dir: ./data/models
+
+# Log Parser State
+log_parser:
+  state_file_path: ./data/drain3_state.bin

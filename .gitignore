@@ -45,10 +45,14 @@ data/labels/*.jsonl
 # HDF5 preprocessed data
 data/metrics/*.h5
 
+# Drain3 state
+data/drain3_state.bin
+
 # Model checkpoints / weights
 *.pt
 *.pth
 *.onnx
+data/models/
 
 # Byte-compiled
 *.pyc
