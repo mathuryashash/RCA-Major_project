@@ -6,8 +6,15 @@ import stat
 import threading
 from queue import Queue, Empty
 from datetime import datetime
+from typing import Optional, Dict, Any
 from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent
+from watchdog.events import (
+    FileSystemEventHandler,
+    FileModifiedEvent,
+    FileCreatedEvent,
+    DirModifiedEvent,
+    DirCreatedEvent,
+)
 from src.common.config import load_config
 
 
@@ -158,7 +165,7 @@ class LogHandler(FileSystemEventHandler):
 
         self._lock = threading.Lock()
 
-    def _get_file_inode(self) -> int:
+    def _get_file_inode(self) -> Optional[int]:
         """Get the inode number of the file for rotation detection."""
         try:
             return os.stat(self.path).st_ino
@@ -170,11 +177,11 @@ class LogHandler(FileSystemEventHandler):
             return os.path.getsize(self.path)
         return 0
 
-    def on_modified(self, event: FileModifiedEvent) -> None:
+    def on_modified(self, event):
         if not event.is_directory and os.path.abspath(event.src_path) == self.path:
             self._check_for_updates()
 
-    def on_created(self, event: FileCreatedEvent) -> None:
+    def on_created(self, event):
         if not event.is_directory and os.path.abspath(event.src_path) == self.path:
             self._on_file_created()
 
@@ -258,7 +265,7 @@ class LogHandler(FileSystemEventHandler):
             pass
         return lines
 
-    def _parse_line(self, line: str) -> dict:
+    def _parse_line(self, line: str) -> Optional[Dict[str, Any]]:
         """Parse a log line into a structured record."""
         if not line:
             return None

@@ -2,11 +2,16 @@
 Custom exceptions for the Automated RCA System.
 """
 
+from typing import Optional
+
 
 class RCAException(Exception):
-    def __init__(self, message: str, code: str = "RCA_ERROR"):
+    def __init__(
+        self, message: str, code: str = "RCA_ERROR", incident_id: Optional[str] = None
+    ):
         self.message = message
         self.code = code
+        self.incident_id = incident_id
         super().__init__(self.message)
 
 
