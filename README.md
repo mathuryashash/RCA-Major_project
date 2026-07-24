@@ -140,6 +140,31 @@ The interactive Streamlit dashboard provides a two-stage workflow:
 
 ---
 
+## 🖥️ Desktop App (PySide6)
+
+A native desktop version of the dashboard, built with PySide6 (Qt 6). Same
+pipeline engine as the Streamlit dashboard and the CLI — shared via
+`src/pipeline/engine.py` — with native widgets for controls/tables and an
+embedded, fully offline Plotly view for the causal graph and anomaly timeline.
+
+### Run from source
+
+```bash
+pip install -r requirements.txt
+cd src
+python -m desktop.main
+```
+
+### Build a standalone .exe
+
+```powershell
+.\packaging\build.ps1
+```
+
+Output: `dist\RCA-Desktop\RCA-Desktop.exe`
+
+---
+
 ## 🧪 Methodology
 
 ### 1. LSTM Autoencoder (Anomaly Detection)
