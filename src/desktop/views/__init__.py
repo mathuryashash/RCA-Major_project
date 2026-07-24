@@ -1,0 +1,1 @@
+"""Desktop views package initialization."""
