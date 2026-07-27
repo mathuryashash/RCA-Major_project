@@ -123,12 +123,21 @@ Location: `%LOCALAPPDATA%\RCA\telemetry.db`.
 ```sql
 samples      (ts INTEGER PRIMARY KEY,      -- wall clock, seconds
               elapsed_ms INTEGER NOT NULL, -- monotonic delta from previous tick
-              ...~25 REAL columns...)
+              ...~25 REAL metric columns...,
+              -- counters for attribution, in physical units
+              cpu_busy_s_delta REAL,        -- core-seconds
+              mem_used_bytes INTEGER,
+              disk_read_bytes_delta INTEGER,
+              disk_write_bytes_delta INTEGER)
 proc_samples (ts INTEGER, pid INTEGER, create_time REAL, name TEXT,
-              cpu_pct REAL, rss INTEGER,
+              cpu_pct REAL,                 -- display only
+              cpu_time_delta_s REAL,        -- core-seconds, for attribution
+              rss INTEGER,
               io_read_delta INTEGER, io_write_delta INTEGER)
-events       (ts INTEGER, provider TEXT, event_id INTEGER,
-              level TEXT, message_redacted TEXT)
+events       (ts INTEGER, record_id INTEGER, provider TEXT, event_id INTEGER,
+              level TEXT,
+              message_redacted TEXT,   -- NULL unless the user opts in
+              UNIQUE(provider, event_id, ts, record_id))
 meta         (key TEXT PRIMARY KEY, value TEXT)
 ```
 
@@ -220,8 +229,34 @@ is healthy, dense exactly when attribution will be read.
 ### Events (`events`, polled every 5 min)
 
 Read via `win32evtlog` from the System and Application logs using a stored
-bookmark, so restarts neither re-read nor miss entries. System and Application
-are readable without elevation; the Security log requires it and is not used.
+bookmark. System and Application are readable without elevation; the Security
+log requires it and is not used.
+
+**The bookmark must advance in the same SQLite transaction that inserts the
+events.** A bookmark stored separately, or committed in a second transaction,
+guarantees a bug: a crash between the two operations either replays events
+already recorded or drops events never recorded, depending on the order. Since
+the bookmark lives in `meta` in the same database, one transaction covers both:
+
+```
+BEGIN
+  INSERT INTO events ...        -- the batch just read
+  UPDATE meta SET value = ?     -- WHERE key = 'evtlog_bookmark_system'
+COMMIT
+```
+
+Events also carry a uniqueness constraint on `(provider, event_id, ts,
+record_id)` so a replay after an unclean shutdown is idempotent rather than
+duplicating rows.
+
+**Bookmark invalidation.** A bookmark becomes unusable if the log is cleared,
+wraps past the bookmarked record, or the channel is recreated. On `EvtSeek`
+failure the collector does not silently restart from the beginning (which would
+re-ingest the entire retained log as if newly observed) nor silently skip. It
+resets the bookmark to the current end of log, and writes a
+`collection_gap` marker row recording the channel and the interval that was
+lost. Incident analysis touching an interval containing such a marker reports
+that event coverage is incomplete for that window.
 
 | Purpose | Provider / ID |
 |---|---|
@@ -251,9 +286,31 @@ Process names in `proc_samples` also disclose installed software.
 | Field | Rule |
 |---|---|
 | `foreground_app` | Executable name only (`chrome.exe`). **Window titles are never captured** — they are the field that leaks document names, URLs, and message contents. |
-| Event `message` | Not stored raw. `provider`, `event_id`, `level` always kept; message truncated to 512 chars, with `C:\Users\<name>\` rewritten to `C:\Users\<redacted>\` and stored as `message_redacted`. |
+| Event `message` | **Not stored at all by default.** See below. |
 | Event providers | Allowlist only (the table above). Everything else is discarded at read time, not filtered later. |
 | `user_idle_sec` | Duration only, never input content. |
+
+**Event message text is opt-in, not redacted-by-default.** Everything RCA
+actually needs from an event — correlation in time, and what kind of failure it
+was — comes from `provider`, `event_id`, `level`, and `ts`. The free-text
+message adds diagnostic colour and carries essentially all of the privacy risk,
+so the default is to discard it at read time.
+
+If the user opts in, messages are truncated to 512 chars and passed through
+redaction covering:
+
+- user profile paths on any drive — `[A-Za-z]:\Users\<name>\` → `<drive>:\Users\<redacted>\`
+- UNC paths — `\\server\share\...` → `\\<redacted>\`
+- URLs — `http(s)://...` → `<url redacted>`
+- email addresses
+- the current username wherever it appears literally
+
+**Residual risk is stated plainly in the opt-in dialog:** regex redaction is
+best-effort and cannot catch application-specific identifiers, document names
+embedded in error strings, or paths in formats not listed above. Anything that
+survives redaction will appear in exported reports. Users who need certainty
+should leave message capture off, which is the default and costs only report
+readability.
 
 **No network egress.** The collector opens no sockets and the app makes no
 outbound requests. All data stays in one local file. This is an explicit
@@ -335,10 +392,17 @@ Retraining:
   "collecting — N days remaining".
 - On demand from Stage 1.
 - **Staleness alarm:** if the rolling 7-day median reconstruction error drifts
-  more than 2x from its value at training time, warn that the model no longer
-  matches current usage and offer a retrain. This is drift detection on the
-  error signal itself — no new model, and it uses the existing
-  `concept_drift_handler.py` seam.
+  more than 2x from its value at training time (`reference_recon_error` in the
+  model artifact), warn that the model no longer matches current usage and offer
+  a retrain. This is drift detection on the error signal itself — no new model.
+
+  This is a **new** component, not a reuse. An earlier draft of this spec
+  described `src/models/concept_drift_handler.py` as an existing seam; that was
+  wrong. It imports `PrometheusDataIngestion` and `DeploymentEventListener`
+  (both deleted here), is built around a deployment soak period that has no
+  laptop meaning, and fabricates its retraining data at line 110 with
+  `np.random.normal(0.6, 0.1, ...)` in the class method itself — not in a demo
+  block. It is deleted, not adapted.
 - Retraining uses the full retained history minus the exclusions above. Subject
   to the circularity bound, this broadens the model over time; the 20% cap is
   what stops it narrowing instead.
@@ -386,6 +450,9 @@ LSTM over history               crash / BSOD / disk error
 anomalous windows               event timestamp
   ↓                               ↓
 merge runs <5 min apart         window = [t-30min, t+5min]
+                                (causal analysis extends to
+                                 t-60min if gap-free — see
+                                 statistical guardrails)
 drop runs <3 windows
   (min duration, not the gap rule)
   ↓                               ↓
@@ -399,7 +466,9 @@ one episode fragmenting into several reports.
 The event-triggered path is what makes crash diagnosis work at all: a BSOD
 produces no gradual metric anomaly — the machine stops — so a detector-only
 design would miss it. The event defines the window and RCA asks what was
-abnormal in the preceding 30 minutes.
+abnormal beforehand — 30 minutes for attribution and reporting, extended to 60
+where gap-free data exists, because Granger needs the sample count (see
+statistical guardrails).
 
 #### RCA scope by failure family
 
@@ -431,6 +500,43 @@ every incident, and that fiction feeds the ranker's `event_correlation` term.
 Real events fill the same slot with the same `events_df` shape;
 `EventCorrelator.correlate()` is unchanged. Windows Update, driver installs, and
 MSI installs are the genuine laptop analogue of a code deployment.
+
+### Statistical guardrails on Granger inference
+
+The topology prior removes *implausible* edges. It does nothing about *spurious*
+ones, and the sample counts here are small enough that spurious edges are the
+default outcome without explicit correction.
+
+An event-triggered window is 35 minutes — **70 samples** at 30 s cadence, 69
+after the differencing in `_make_stationary`. With `k` anomalous metrics and
+`max_lag` lags the pipeline runs `k(k-1) x max_lag` tests: for 8 metrics at lag
+5 that is **280 tests**, of which roughly **14 will pass p<0.05 by chance
+alone**. Those false edges then feed a ranker whose dominant term is out-degree.
+
+Four guardrails, applied in order:
+
+1. **Minimum observations.** Require `n >= max(30, 10 x (max_lag + 1))` usable
+   samples after differencing, with no gap in the window. At `max_lag=5` that is
+   60. Event-triggered windows therefore extend to **60 minutes** (120 samples)
+   where gap-free data exists, rather than the bare 35. If the requirement
+   cannot be met, no causal inference is attempted for that incident.
+2. **Lag bounded by sample count.** `max_lag = min(5, floor(n/10))`, so a short
+   window automatically tests fewer lags instead of overfitting.
+3. **Multiple-testing correction.** Benjamini–Hochberg FDR at `q=0.05` applied
+   **once across the entire pair x lag test set**, not per pair. Raw p<0.05 is
+   never used as the edge criterion.
+4. **Effect size floor.** A surviving edge must also reduce the restricted
+   model's residual variance by **>=5%**. Significance on 120 samples is easy;
+   a lag that explains almost none of the variance is not a mechanism.
+
+Only the best surviving lag per ordered pair contributes an edge, so one pair
+cannot inflate out-degree by appearing at five lags.
+
+**If nothing survives, say so.** When no edge passes all four gates the report
+states **"no supported causal chain"** and presents the anomalous metrics ranked
+by severity alongside process attribution, explicitly labelled as correlation
+without a causal claim. This is a common and legitimate outcome for short
+incidents, and it is a better answer than a ranked list of statistical noise.
 
 ### Topology prior
 
@@ -498,24 +604,53 @@ everything is thermally coupled. Physically true, diagnostically useless.
 
 The metric graph explains mechanism; attribution answers who.
 
-1. Take the top-ranked metric from the causal ranker and map it to a per-process
-   column:
+**Percentages require unit-compatible numerator and denominator.** Process CPU
+percent can exceed 100 on a multicore machine while system CPU percent cannot;
+process RSS is bytes and cannot be divided by `mem_pct`; process I/O is bytes
+and cannot be divided by `disk_busy_pct`. Attribution therefore never uses the
+percentage columns. Both sides are compared in a shared physical unit, which
+requires the collector to store the underlying counters:
 
-   | Top metric subsystem | Process column |
-   |---|---|
-   | `MEM`, `SWAP` | `rss` |
-   | `CPU`, `LOAD` | `cpu_pct` |
-   | `DISK` | `io_read_delta + io_write_delta` |
-   | `NET`, `POWER` | no per-process signal — attribution skipped, mechanism only |
+| Resource | Process numerator | System denominator | Shared unit |
+|---|---|---|---|
+| CPU | `Σ cpu_time_delta_s` (user+system) | `cpu_busy_s_delta` | core-seconds |
+| Memory | `Δrss` | `Δmem_used_bytes` | bytes |
+| Disk | `io_read_delta + io_write_delta` | `disk_read_bytes_delta + disk_write_bytes_delta` | bytes |
+| Network, Power | — | — | no per-process signal; attribution skipped, mechanism only |
 
+The percentage columns (`cpu_pct`, `mem_pct`, `disk_busy_pct`) remain in
+`samples` for the model and for display; the counter columns above are added
+alongside them specifically so attribution has aligned units.
+
+Procedure:
+
+1. Take the top-ranked metric, map its subsystem to a resource above.
 2. Pull `proc_samples` for the incident window and the 30 minutes preceding it.
    Process identity is `(pid, create_time)`, never `pid` alone.
 3. For each process, baseline = median of its pre-window samples, peak = max
-   within the window, `delta = peak - baseline`.
-4. Rank by share of the **system-level** delta for that metric, not by share of
-   the observed sum (see remainder below).
+   within the window, `delta = peak - baseline` (CPU and disk use summed
+   deltas over the window rather than a peak, since they are flow quantities).
+4. Rank by share of the **system delta in the same unit**.
 5. Report **"diffuse — no single process responsible"** if the top process
    explains <30%.
+
+**Reconciliation check.** Per-process sums do not have to equal the system
+figure, and can legitimately exceed it: RSS double-counts pages shared between
+processes, and per-process I/O counters include logical reads served from cache
+that never reached the disk. So before any percentage is displayed:
+
+```
+ratio = Σ(observed clamped deltas) / system_delta
+```
+
+- `0 < ratio ≤ 1.2` — percentages shown, remainder line included.
+- `ratio > 1.2` or `system_delta ≤ 0` — **no percentages are displayed at all.**
+  The result is labelled "attribution unreconciled" and shows absolute
+  per-process deltas ranked, with the system figure alongside.
+
+A ranked list of absolute deltas is still useful. A percentage that exceeds
+100%, or one computed against a denominator that does not measure the same
+thing, is worse than no percentage — it looks authoritative and is wrong.
 
 Rule 5 matters: memory pressure from forty browser tabs is genuinely diffuse,
 and a system that always names a culprit will confidently name the wrong one.
@@ -595,12 +730,29 @@ Detected incidents (last 7 days)
 | `reporting/anomaly_simulator.py` | synthetic demo tool | delete |
 | `anomaly_detection/anomaly_scorer.py:119-122` | `__main__` demo block | delete |
 | `causal_inference/causal_engine.py:553-563` | `__main__` demo block | delete |
+| `models/concept_drift_handler.py:110` | **`np.random.normal` in the class method, not a demo block** | delete file; replaced by the staleness monitor |
+| `anomaly_detection/dimensionality_reduction.py:147` | `np.random` in `__main__` demo | delete block |
+| `causal_inference/granger_causality.py:130-132` | `np.random` in `__main__` demo | delete block |
+| `causal_inference/pc_algorithm.py:93-95` | `np.random` in `__main__` demo | delete block |
 | `tests/test_pipeline_engine.py` | 3 tests call `generate_data` | rewrite against fixture |
 | `models/lstm_autoencoder.py:178` | stale print string | edit |
 
 Dead once real telemetry lands, all server-infrastructure sources with no laptop
 meaning: `jaeger_connector.py`, `deployment_listener.py`,
 `cloudwatch_connector.py`, `prometheus_connector.py`.
+
+**Verification of this inventory must grep for two things, not one.** Searching
+for `SyntheticMetricsGenerator|generate_data|inject_failure` finds the obvious
+sites but misses code that fabricates data with raw `np.random` — which is how
+`concept_drift_handler.py:110` was initially missed. The completeness check is:
+
+```
+grep -rn "SyntheticMetricsGenerator|synthetic_generator|generate_data|inject_failure" src/
+grep -rn "np\.random|numpy\.random|torch\.randn|torch\.rand\(" src/
+```
+
+Both must return empty (outside tests using recorded fixtures) before the
+no-synthetic-data requirement is met.
 
 Reports lose the `ground_truth` block — real incidents have no oracle. It is
 replaced by an honest confidence statement: composite score, share of delta
@@ -668,7 +820,20 @@ Tests, all covering logic that can silently be wrong:
   processes; negative deltas clamp to 0; observed shares plus remainder sum to
   100%; the <30% case reports "diffuse"; the >40% remainder case reports low
   confidence
-- event redaction rewrites `C:\Users\<name>\` and truncates to 512 chars
+- attribution units: a fixture where per-process RSS sums above system used
+  bytes (shared pages) yields `ratio > 1.2` and produces **no percentages**,
+  only ranked absolute deltas
+- event ingestion is transactional: killing the process between insert and
+  bookmark advance leaves neither a duplicate nor a lost event; replaying the
+  same batch is idempotent via the uniqueness constraint
+- an invalidated bookmark writes a `collection_gap` marker rather than
+  re-ingesting the whole log
+- Granger guardrails: a window below the minimum observation count attempts no
+  inference; BH-FDR is applied across the whole test set; an edge that is
+  significant but reduces residual variance <5% is dropped; when nothing
+  survives the report says "no supported causal chain"
+- event message text is absent from the store unless opted in; with opt-in,
+  redaction covers non-C: drive letters, UNC paths, and URLs
 
 ## Explicitly out of scope
 
