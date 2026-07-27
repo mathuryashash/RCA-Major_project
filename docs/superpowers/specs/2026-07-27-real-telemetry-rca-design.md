@@ -167,7 +167,7 @@ the desired behaviour.
 
 #### Rate metric calculation
 
-Rate metrics (`disk_read_bps`, `net_sent_bps`, `swap_in_rate`,
+Rate metrics (`disk_read_bps`, `net_sent_bps`, `swap_used_delta`,
 `battery_drain_rate`, ...) are computed as `Δcounter / elapsed_ms` using
 `time.monotonic()`, **not** the assumed 30 s cadence. A delayed or slow tick
 would otherwise inflate every rate on that row. `elapsed_ms` is persisted so the
@@ -210,11 +210,33 @@ scoring confidently against an outdated notion of normal. See Retraining.
 | Group | Columns |
 |---|---|
 | CPU | `cpu_pct`, `cpu_pct_max_core`, `cpu_freq_mhz`, `cpu_freq_ratio` |
-| Memory | `mem_pct`, `mem_available_mb`, `swap_pct`, `swap_in_rate`, `swap_out_rate` |
+| Memory | `mem_pct`, `mem_available_mb`, `swap_pct`, `swap_used_bytes`, `swap_used_delta` |
 | Disk | `disk_read_bps`, `disk_write_bps`, `disk_busy_pct`, `disk_free_pct` |
 | Network | `net_sent_bps`, `net_recv_bps` |
-| Load | `process_count`, `thread_count` |
-| Power | `battery_pct`, `battery_drain_rate`, `power_plugged` |
+| Load | `process_count` |
+| Power | `battery_pct`, `battery_drain_rate`, `power_plugged` (all nullable) |
+
+**Three corrections from probing psutil 6.0.0 on Windows during planning:**
+
+- `swap_in_rate` / `swap_out_rate` are **removed**. `psutil.swap_memory().sin`
+  and `.sout` are not implemented on Windows and return a constant 0 — measured
+  over a 3 s interval with 12.4 GB of swap in use. They would have been
+  constant-zero columns feeding the `MEM -> SWAP -> DISK` mechanism chain.
+  Paging activity is instead derived from `swap_used_delta`
+  (Δ`swap_memory().used`), which does move.
+- `thread_count` is **removed**. There is no cheap system-wide thread count on
+  Windows; summing `num_threads()` across processes measured **11.3 s**, which
+  is 38x the entire sampling budget. `process_count` (`len(psutil.pids())`,
+  0.26 ms) carries the `LOAD` subsystem alone.
+- Power columns are **nullable**. `psutil.sensors_battery()` returns `None` on
+  machines without a battery or where the driver does not expose one; the
+  collector writes NULL rather than failing, and the `POWER` subsystem is
+  simply absent from causal analysis on such machines.
+
+`cpu_freq_ratio` was checked and **does** work: under sustained load the probe
+observed 1453 MHz against a 2100 MHz maximum, so the throttle proxy is real.
+Only `cpu_freq().max` is used as the denominator — `.min` reads 0.0 on Windows
+and is unusable.
 | Context (stored, excluded from the model) | `on_battery`, `user_idle_sec`, `foreground_app` (executable name only — never window titles, see Privacy) |
 
 Temperature is deliberately absent: `psutil.sensors_temperatures()` returns
@@ -559,10 +581,10 @@ Every modelled metric maps to exactly one subsystem:
 
 | Subsystem | Metrics |
 |---|---|
-| `LOAD` | `process_count`, `thread_count` |
+| `LOAD` | `process_count` |
 | `CPU` | `cpu_pct`, `cpu_pct_max_core`, `cpu_freq_mhz`, `cpu_freq_ratio` |
 | `MEM` | `mem_pct`, `mem_available_mb` |
-| `SWAP` | `swap_pct`, `swap_in_rate`, `swap_out_rate` |
+| `SWAP` | `swap_pct`, `swap_used_bytes`, `swap_used_delta` |
 | `DISK` | `disk_read_bps`, `disk_write_bps`, `disk_busy_pct`, `disk_free_pct` |
 | `NET` | `net_sent_bps`, `net_recv_bps` |
 | `POWER` | `battery_pct`, `battery_drain_rate`, `power_plugged` |
@@ -635,9 +657,9 @@ per-process swap accounting via psutil, and paging is driven by resident
 memory demand. The output labels this **"attributed via memory footprint
 (proxy)"** rather than presenting it as a direct measurement.
 
-`LOAD` is mechanism-only by necessity: `process_count` and `thread_count` are
-population counts, and a top-N sample cannot see the many small processes whose
-creation constitutes a change in them. Attributing a count change to the fifteen
+`LOAD` is mechanism-only by necessity: `process_count` is a population count,
+and a top-N sample cannot see the many small processes whose creation
+constitutes a change in it. Attributing a count change to the fifteen
 largest processes would be actively misleading.
 
 The percentage columns (`cpu_pct`, `mem_pct`, `disk_busy_pct`) remain in
@@ -720,7 +742,7 @@ incidents that never triggered a burst are marked as coarsely sampled.
 ```
 Incident  2026-07-27 14:32 → 14:38  (6m)   confidence High
 
-Mechanism    mem_pct ──> swap_out_rate ──> disk_busy_pct ──> cpu_pct
+Mechanism    mem_pct ──> swap_used_delta ──> disk_busy_pct ──> cpu_pct
              Granger, BH-FDR q<0.05, lags 1-3 samples,
              residual variance reduction 7-19%
 
