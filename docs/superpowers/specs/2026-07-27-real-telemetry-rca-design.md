@@ -134,10 +134,12 @@ proc_samples (ts INTEGER, pid INTEGER, create_time REAL, name TEXT,
               cpu_time_delta_s REAL,        -- core-seconds, for attribution
               rss INTEGER,
               io_read_delta INTEGER, io_write_delta INTEGER)
-events       (ts INTEGER, record_id INTEGER, provider TEXT, event_id INTEGER,
-              level TEXT,
+events       (ts INTEGER, channel TEXT, record_id INTEGER,
+              provider TEXT, event_id INTEGER, level TEXT,
               message_redacted TEXT,   -- NULL unless the user opts in
-              UNIQUE(provider, event_id, ts, record_id))
+              UNIQUE(channel, record_id))
+collection_gaps (channel TEXT, start_ts INTEGER, end_ts INTEGER,
+                 detected_at INTEGER)
 meta         (key TEXT PRIMARY KEY, value TEXT)
 ```
 
@@ -245,18 +247,23 @@ BEGIN
 COMMIT
 ```
 
-Events also carry a uniqueness constraint on `(provider, event_id, ts,
-record_id)` so a replay after an unclean shutdown is idempotent rather than
-duplicating rows.
+Idempotency is **channel-scoped**: `UNIQUE(channel, record_id)`. Event Log
+record IDs are monotonic per channel, not globally, so System and Application
+both contain a record 1 — a global constraint would silently discard one of
+them. Each channel also carries its own bookmark
+(`evtlog_bookmark_system`, `evtlog_bookmark_application`) and is polled
+independently.
 
 **Bookmark invalidation.** A bookmark becomes unusable if the log is cleared,
 wraps past the bookmarked record, or the channel is recreated. On `EvtSeek`
 failure the collector does not silently restart from the beginning (which would
 re-ingest the entire retained log as if newly observed) nor silently skip. It
-resets the bookmark to the current end of log, and writes a
-`collection_gap` marker row recording the channel and the interval that was
-lost. Incident analysis touching an interval containing such a marker reports
-that event coverage is incomplete for that window.
+resets the bookmark to the current end of log, and writes a row into
+`collection_gaps(channel, start_ts, end_ts, detected_at)` — `start_ts` being the
+last successfully ingested event time for that channel and `end_ts` the reset
+point. Incident analysis whose window intersects a gap row reports that event
+coverage is incomplete for that channel and window, so a missing correlated
+event is never mistaken for the absence of one.
 
 | Purpose | Provider / ID |
 |---|---|
@@ -611,12 +618,27 @@ and cannot be divided by `disk_busy_pct`. Attribution therefore never uses the
 percentage columns. Both sides are compared in a shared physical unit, which
 requires the collector to store the underlying counters:
 
-| Resource | Process numerator | System denominator | Shared unit |
-|---|---|---|---|
-| CPU | `Σ cpu_time_delta_s` (user+system) | `cpu_busy_s_delta` | core-seconds |
-| Memory | `Δrss` | `Δmem_used_bytes` | bytes |
-| Disk | `io_read_delta + io_write_delta` | `disk_read_bytes_delta + disk_write_bytes_delta` | bytes |
-| Network, Power | — | — | no per-process signal; attribution skipped, mechanism only |
+Every subsystem has an explicit rule — there is no unmapped case:
+
+| Subsystem | Resource used | Process numerator | System denominator | Shared unit |
+|---|---|---|---|---|
+| `CPU` | CPU | `Σ cpu_time_delta_s` (user+system) | `cpu_busy_s_delta` | core-seconds |
+| `MEM` | Memory | `Δrss` | `Δmem_used_bytes` | bytes |
+| `SWAP` | Memory *(proxy)* | `Δrss` | `Δmem_used_bytes` | bytes |
+| `DISK` | Disk | `io_read_delta + io_write_delta` | `disk_read_bytes_delta + disk_write_bytes_delta` | bytes |
+| `LOAD` | — | mechanism-only | — | — |
+| `NET` | — | mechanism-only | — | — |
+| `POWER` | — | mechanism-only | — | — |
+
+`SWAP` attributes through memory footprint because Windows exposes no
+per-process swap accounting via psutil, and paging is driven by resident
+memory demand. The output labels this **"attributed via memory footprint
+(proxy)"** rather than presenting it as a direct measurement.
+
+`LOAD` is mechanism-only by necessity: `process_count` and `thread_count` are
+population counts, and a top-N sample cannot see the many small processes whose
+creation constitutes a change in them. Attributing a count change to the fifteen
+largest processes would be actively misleading.
 
 The percentage columns (`cpu_pct`, `mem_pct`, `disk_busy_pct`) remain in
 `samples` for the model and for display; the counter columns above are added
@@ -624,7 +646,17 @@ alongside them specifically so attribution has aligned units.
 
 Procedure:
 
-1. Take the top-ranked metric, map its subsystem to a resource above.
+1. Select the metric to attribute:
+   - **Normal case** — the top-ranked metric from the causal ranker.
+   - **No supported causal chain** — there is no ranked metric, so fall back to
+     the highest-severity anomalous metric whose subsystem has an attribution
+     rule. The result is labelled **correlation-only**: it names what consumed
+     the resource, and makes no claim that it caused the incident.
+   - If neither path yields a metric with an attribution rule (for example the
+     only anomalies are in `LOAD` or `NET`), attribution is skipped and the
+     report presents anomalous metrics and correlated events alone.
+
+   Then map that metric's subsystem to a resource above.
 2. Pull `proc_samples` for the incident window and the 30 minutes preceding it.
    Process identity is `(pid, create_time)`, never `pid` alone.
 3. For each process, baseline = median of its pre-window samples, peak = max
@@ -689,12 +721,38 @@ incidents that never triggered a burst are marked as coarsely sampled.
 Incident  2026-07-27 14:32 → 14:38  (6m)   confidence High
 
 Mechanism    mem_pct ──> swap_out_rate ──> disk_busy_pct ──> cpu_pct
-             (Granger, p<0.05, lags 1-3 samples)
+             Granger, BH-FDR q<0.05, lags 1-3 samples,
+             residual variance reduction 7-19%
 
-Attribution  chrome.exe   +5.9 GB RSS   78% of delta
-             Code.exe     +1.1 GB RSS   15% of delta
+Attribution  resource: memory (bytes)    reconciliation ratio 1.04
+             chrome.exe     +5.9 GB       71%
+             Code.exe       +1.1 GB       13%
+             unattributed   +1.3 GB       16%
 
-Correlated   Resource-Exhaustion-Detector 2004 @ 14:33
+Correlated   Resource-Exhaustion-Detector 2004 @ 14:33   [System]
+```
+
+The statistics shown are the ones the design actually gates on: the
+FDR-adjusted threshold and the effect size, not a raw p-value. The
+reconciliation ratio and the unattributed line are always present, so a reader
+can see how much of the delta the named processes really account for.
+
+Where no edge survives the guardrails:
+
+```
+Incident  2026-07-26 09:15 → 09:17  (2m)   confidence Low
+
+Mechanism    no supported causal chain
+             (58 usable samples, below the 60-sample minimum)
+
+Anomalous    mem_pct (severity 0.81), disk_busy_pct (0.62)
+
+Attribution  correlation-only, via mem_pct
+             resource: memory (bytes)    reconciliation ratio 0.93
+             Teams.exe      +2.1 GB       64%
+             unattributed   +1.2 GB       36%
+
+Correlated   none    [event coverage complete]
 ```
 
 ## User interface changes
