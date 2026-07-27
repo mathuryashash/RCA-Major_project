@@ -27,7 +27,7 @@ Two halves:
 | Cadence, system metrics | 30 s | Baseline in ~3 days instead of ~30; short incidents survive |
 | Cadence, per-process | 5 min, bursting to 30 s under load | Measured: per-process enumeration costs ~900 ms (see Measurements) |
 | Failure families collected | performance, crashes, exhaustion, power | Collection is irreversible; detection is not |
-| Failure families with full RCA | performance + crashes | Exhaustion needs a drift detector that does not exist yet |
+| Failure families with full RCA | all *acute* events; not slow drift | The split is acute vs drift, not subsystem — see RCA scope |
 | Baseline selection | Event-filtered | The Event Log already says when the machine was unhealthy |
 | Regime conditioning | Columns stored, not used | Cannot backfill; enabling it later is a modelling spec |
 | Compute device | CPU, threads capped at 4 | Measured: 3.9x faster than the 20-thread default; GPU cannot help a 0.52 MB model |
@@ -121,24 +121,68 @@ Location: `%LOCALAPPDATA%\RCA\telemetry.db`.
 ### Schema
 
 ```sql
-samples      (ts INTEGER PRIMARY KEY, ...~25 REAL columns...)
-proc_samples (ts INTEGER, pid INTEGER, name TEXT, cpu_pct REAL,
-              rss INTEGER, io_read INTEGER, io_write INTEGER)
+samples      (ts INTEGER PRIMARY KEY,      -- wall clock, seconds
+              elapsed_ms INTEGER NOT NULL, -- monotonic delta from previous tick
+              ...~25 REAL columns...)
+proc_samples (ts INTEGER, pid INTEGER, create_time REAL, name TEXT,
+              cpu_pct REAL, rss INTEGER,
+              io_read_delta INTEGER, io_write_delta INTEGER)
 events       (ts INTEGER, provider TEXT, event_id INTEGER,
-              level TEXT, message TEXT)
+              level TEXT, message_redacted TEXT)
 meta         (key TEXT PRIMARY KEY, value TEXT)
 ```
 
-Uptime gaps are **derived**, not stored: a gap is any consecutive pair of
-`samples.ts` more than 90 s apart. Sleep, hibernate, shutdown, and collector
-crashes all present identically, which is the desired behaviour — no training
-window may span one.
+`(pid, create_time)` is the process identity, not `pid` alone — Windows reuses
+PIDs aggressively and a reused PID would otherwise fabricate a huge delta.
+
+I/O columns store **per-tick deltas**, not the cumulative counters psutil
+returns. Cumulative counters reset when a process restarts, which would produce
+a large negative delta; the collector computes the delta at write time and
+writes 0 when the previous value is missing or larger than the current one.
+
+#### Gap semantics
+
+A gap is any consecutive pair of `samples.ts` more than **45 s** apart, i.e.
+1.5x the 30 s cadence. The earlier 90 s figure was wrong: one dropped tick
+produces a 60 s interval, which would have passed a 90 s test and let a model
+window silently span missing data.
+
+The rule is defined relative to cadence — `gap_threshold = 1.5 x cadence` — so
+it stays correct if the cadence is ever changed.
+
+No training or inference window may span a gap. Sleep, hibernate, shutdown,
+collector crashes, and single dropped ticks all present identically, which is
+the desired behaviour.
+
+#### Rate metric calculation
+
+Rate metrics (`disk_read_bps`, `net_sent_bps`, `swap_in_rate`,
+`battery_drain_rate`, ...) are computed as `Δcounter / elapsed_ms` using
+`time.monotonic()`, **not** the assumed 30 s cadence. A delayed or slow tick
+would otherwise inflate every rate on that row. `elapsed_ms` is persisted so the
+computation is auditable after the fact.
+
+The first tick after collector start has no predecessor: all rate columns are
+written `NULL` and that row is excluded from training windows. Same for the
+first tick after any gap.
+
+#### Single-collector lock
+
+The collector acquires an exclusive lock (named mutex, released on exit) before
+its first write. A second instance exits immediately rather than double-writing
+the same timestamps. Without this, a stale Task Scheduler entry plus a manual
+run would produce duplicated rows and doubled rates.
 
 | Table | Rate | Year 1 | Steady state |
 |---|---|---|---|
 | `samples` | 2,880 rows/day | ~263 MB | grows, never purged |
-| `proc_samples` | 4,320 rows/day | 95 MB | ~8 MB (30-day purge) |
+| `proc_samples` | ~8,100 rows/day | ~206 MB | **~17 MB** (30-day purge) |
 | `events` | hundreds/day | ~10 MB | grows slowly |
+
+The `proc_samples` rate is measured, not assumed: "top 15 by CPU union top 15 by
+RSS" yields **28.2 rows per tick** on a real machine (max 29 of a theoretical
+30) — the two lists barely overlap. At 288 ticks/day that is ~8,100 rows/day,
+before burst-mode ticks.
 
 **The 30-day purge does not affect the model.** The model trains on `samples`,
 which is never purged; it has never seen `proc_samples`. The purge only means
@@ -160,7 +204,7 @@ scoring confidently against an outdated notion of normal. See Retraining.
 | Network | `net_sent_bps`, `net_recv_bps` |
 | Load | `process_count`, `thread_count` |
 | Power | `battery_pct`, `battery_drain_rate`, `power_plugged` |
-| Context (stored, excluded from the model) | `on_battery`, `user_idle_sec`, `foreground_app` |
+| Context (stored, excluded from the model) | `on_battery`, `user_idle_sec`, `foreground_app` (executable name only — never window titles, see Privacy) |
 
 Temperature is deliberately absent: `psutil.sensors_temperatures()` returns
 nothing on most Windows laptops. `cpu_freq_ratio` (current ÷ max) is the
@@ -168,7 +212,8 @@ reliable throttle proxy and needs no extra dependency.
 
 ### Per-process (`proc_samples`, every 5 min)
 
-Top 15 processes by CPU and by RSS, deduplicated. Bursts to every 30 s while
+Top 15 processes by CPU union top 15 by RSS — measured at ~28 rows per tick,
+since the two lists barely overlap. Bursts to every 30 s while
 `cpu_pct > 80`, `mem_pct > 85`, or `disk_busy_pct > 80` — free when the machine
 is healthy, dense exactly when attribution will be read.
 
@@ -188,16 +233,100 @@ are readable without elevation; the Security log requires it and is not used.
 | Resource exhaustion | Resource-Exhaustion-Detector 2004 |
 | Change events (deployment analogue) | WindowsUpdateClient, MsiInstaller |
 
+## Privacy and data retention
+
+This design continuously records what the user is doing on their own machine and
+keeps it indefinitely. Two fields carry real sensitivity, and they are the two
+most useful ones:
+
+- **`foreground_app`** — reveals activity patterns: which applications, when,
+  for how long.
+- **Event Log `message`** — free text routinely containing file paths, usernames,
+  installed software, and occasionally URLs or document names.
+
+Process names in `proc_samples` also disclose installed software.
+
+**Minimisation, applied at write time — the collector never stores the raw form:**
+
+| Field | Rule |
+|---|---|
+| `foreground_app` | Executable name only (`chrome.exe`). **Window titles are never captured** — they are the field that leaks document names, URLs, and message contents. |
+| Event `message` | Not stored raw. `provider`, `event_id`, `level` always kept; message truncated to 512 chars, with `C:\Users\<name>\` rewritten to `C:\Users\<redacted>\` and stored as `message_redacted`. |
+| Event providers | Allowlist only (the table above). Everything else is discarded at read time, not filtered later. |
+| `user_idle_sec` | Duration only, never input content. |
+
+**No network egress.** The collector opens no sockets and the app makes no
+outbound requests. All data stays in one local file. This is an explicit
+non-goal, not merely an omission — no telemetry, no crash reporting, no update
+check.
+
+**Storage and access.** `%LOCALAPPDATA%\RCA\telemetry.db`, created with a
+user-only ACL.
+
+**Retention and deletion.**
+
+| Data | Default retention |
+|---|---|
+| `samples` | Indefinite (needed for retraining breadth), configurable |
+| `proc_samples` | 30 days |
+| `events` | 1 year |
+
+The app provides **Delete all collected data**: stops the collector, deletes the
+database and all trained models, and restarts collection from empty. It also
+provides **Disable collection**, which unregisters the Task Scheduler entry.
+
+**Disclosure.** On first run the app states exactly what is collected, where it
+is stored, that it never leaves the machine, and how to delete it. The collector
+is not registered until the user acknowledges this. Consent is a precondition of
+collection, not a setting discovered afterwards.
+
+**Exported reports are the real egress path.** The Markdown and JSON reports
+contain process names and redacted event text, and reports are the artifact a
+user actually shares — with a colleague, in a bug tracker, in a submission. The
+export dialog states what the file contains before writing it.
+
 ## Baseline and retraining
+
+A bad event is an *outcome*. The pathology that produced it is in the minutes
+**before** the event, so excluding only windows that overlap the event timestamp
+would train the model on exactly the degradation it needs to detect. Exclusion
+therefore uses an asymmetric buffer around each bad event:
+
+```
+bad event at T  ->  exclude [T - 60 min, T + 15 min]
+```
+
+The long pre-buffer captures the lead-up; the short post-buffer captures
+recovery and reboot settling.
 
 Training data is all retained history **except**:
 
-- any 30-minute window overlapping a bad event (crash, unexpected shutdown,
-  disk error, resource exhaustion, thermal throttle), and
-- any window spanning an uptime gap >90 s.
+- any window intersecting `[T - 60 min, T + 15 min]` for a bad event T (crash,
+  hang, unexpected shutdown, disk error, WHEA, resource exhaustion),
+- any window intersecting `[start - 10 min, end + 10 min]` for a **confirmed
+  detector-discovered incident** (see circularity bound below),
+- any window containing a gap (>45 s interval), and
+- any window containing a `NULL` rate row (first tick after start or gap).
 
 The 99th-percentile reconstruction-error threshold absorbs residual
 contamination.
+
+**Circularity bound.** Excluding detector-discovered incidents means the model's
+own output shapes its next training set, which if unbounded makes it
+progressively narrower and more trigger-happy — each retrain would find the
+previous notion of normal even more normal. Three constraints:
+
+1. The **first** training run excludes only Event-Log-derived windows. The
+   detector has produced nothing to exclude yet, and this anchors the baseline
+   to external evidence rather than to itself.
+2. Only incidents at confidence High or above are excluded on retrain.
+3. If total exclusions would exceed **20%** of retained history, exclusion stops
+   at the 20% bound, dropping the lowest-severity candidates first, and the app
+   warns that the machine has been unhealthy often enough that the baseline may
+   be unrepresentative.
+
+The excluded fraction is recorded in the model artifact so a suspicious model
+can be diagnosed after the fact.
 
 Retraining:
 
@@ -210,8 +339,36 @@ Retraining:
   matches current usage and offer a retrain. This is drift detection on the
   error signal itself — no new model, and it uses the existing
   `concept_drift_handler.py` seam.
-- Retraining always uses the full retained history, so the model broadens over
-  time rather than narrowing.
+- Retraining uses the full retained history minus the exclusions above. Subject
+  to the circularity bound, this broadens the model over time; the 20% cap is
+  what stops it narrowing instead.
+
+### Model artifact
+
+The model is **not** a bare `.pt` file. `torch.save` of a `state_dict` records
+none of the preprocessing needed to score data compatibly, and the scaler is
+currently refit on whatever data is at hand — so after a restart, a schema
+change, or a grown baseline, the same model would silently score against
+different scaling. That produces plausible-looking, wrong anomaly scores, which
+is the worst failure mode available.
+
+A model is a versioned bundle, written atomically (temp file then rename):
+
+| Field | Why |
+|---|---|
+| `schema_version` | refuse to load against an incompatible `samples` schema |
+| `feature_order` | column order is positional in the tensor; a reorder silently corrupts scoring |
+| `scaler_params` | per-feature min/max from `MinMaxScaler`, persisted not refit |
+| `thresholds` | per-metric calibrated thresholds |
+| `window_size`, `stride`, `cadence_s` | a model trained at 30 s cadence is invalid at 60 s |
+| `training_range` | first and last `ts` used |
+| `excluded_fraction` | from the circularity bound |
+| `reference_recon_error` | median at training time; the staleness alarm compares against it |
+| `torch_version`, `created_at`, `model_id` | provenance |
+
+Load refuses, with an explicit message, when `schema_version`,
+`feature_order`, or `cadence_s` disagree with the current store. It does not
+silently coerce. Stage 2 stays disabled until a compatible model exists.
 
 ## Detection and root cause
 
@@ -229,7 +386,8 @@ LSTM over history               crash / BSOD / disk error
 anomalous windows               event timestamp
   ↓                               ↓
 merge runs <5 min apart         window = [t-30min, t+5min]
-drop runs <3 windows (90 s)
+drop runs <3 windows
+  (min duration, not the gap rule)
   ↓                               ↓
         └──────── Incident ────────┘
    {start, end, peak_severity, trigger, metrics[]}
@@ -242,6 +400,29 @@ The event-triggered path is what makes crash diagnosis work at all: a BSOD
 produces no gradual metric anomaly — the machine stops — so a detector-only
 design would miss it. The event defines the window and RCA asks what was
 abnormal in the preceding 30 minutes.
+
+#### RCA scope by failure family
+
+The scope line is **acute versus slow drift**, not subsystem. Anything that
+produces a bounded incident window gets full treatment, regardless of which
+family it belongs to:
+
+| Failure | Trigger | Treatment |
+|---|---|---|
+| Performance degradation | detector | Full: mechanism + attribution |
+| App crash / hang | event 1000, 1002 | Full: mechanism + attribution |
+| Unexpected shutdown / BSOD | event 41, WHEA | Full: mechanism + attribution |
+| Disk fault | event 7, 51, 153 | Full: mechanism + attribution |
+| Resource exhaustion, **acute** | event 2004 | Full: mechanism + attribution |
+| Resource exhaustion, **slow drift** | — | **Out of scope.** Collected and threshold-flagged only; no drift detector |
+| Battery / power | — | Collected and threshold-flagged; appears in mechanism chains via `POWER`, but has no per-process signal so attribution is skipped |
+
+This resolves the apparent conflict with the decision table: disk faults and
+acute exhaustion *are* fully analysed, because an event gives them a window.
+What is deferred is detecting the *gradual* version — a disk filling over three
+weeks, or a memory leak with a rising floor — which needs a trend detector that
+a 30-minute window cannot provide and which should be tuned against real
+history rather than guessed.
 
 ### Real events replace the fabricated one
 
@@ -256,25 +437,55 @@ MSI installs are the genuine laptop analogue of a code deployment.
 Every metric maps to a subsystem, and only physically plausible directed edges
 survive Granger:
 
-Using only collected column names — note that `cpu_temp` and `fan_rpm` are
-deliberately not collected, so the throttle path is expressed through
-`cpu_freq_ratio`:
+The prior is defined at **subsystem** level, not metric-pair level, so it is
+exhaustive by construction. Enumerating metric pairs would leave gaps every time
+a column is added, and a metric absent from the table gets pruned into
+isolation — which, as shown below, actively distorts ranking.
+
+Every modelled metric maps to exactly one subsystem:
+
+| Subsystem | Metrics |
+|---|---|
+| `LOAD` | `process_count`, `thread_count` |
+| `CPU` | `cpu_pct`, `cpu_pct_max_core`, `cpu_freq_mhz`, `cpu_freq_ratio` |
+| `MEM` | `mem_pct`, `mem_available_mb` |
+| `SWAP` | `swap_pct`, `swap_in_rate`, `swap_out_rate` |
+| `DISK` | `disk_read_bps`, `disk_write_bps`, `disk_busy_pct`, `disk_free_pct` |
+| `NET` | `net_sent_bps`, `net_recv_bps` |
+| `POWER` | `battery_pct`, `battery_drain_rate`, `power_plugged` |
+
+Adding a metric column requires adding it here; a startup assertion fails if any
+modelled feature has no subsystem, so the mapping cannot silently go stale.
+
+Allowed directed edges between subsystems:
 
 ```
-process_count ──> cpu_pct ──> cpu_freq_ratio        (sustained load throttles)
-thread_count  ──> cpu_pct
-
-mem_pct ──> swap_out_rate ──> disk_busy_pct ──> cpu_pct
-disk_free_pct ──> swap_out_rate                     (no room to page out)
-
-net_recv_bps ──> disk_write_bps                     (downloads hit disk)
-
-power_plugged ──> cpu_freq_ratio                    (power-saving throttle)
-battery_pct   ──> cpu_freq_ratio
+LOAD  ──> CPU        more runnable work raises utilisation
+LOAD  ──> MEM        more processes consume memory
+MEM   ──> SWAP       pressure forces paging
+SWAP  ──> DISK       paging is disk traffic
+DISK  ──> CPU        io wait presents as cpu time
+NET   ──> DISK       downloads land on disk
+POWER ──> CPU        power-saving and thermal limits throttle frequency
+CPU   ──> POWER      sustained load drains battery
 ```
 
-Edges absent from the table are pruned before ranking, so `net_recv_bps →
-mem_pct` cannot be inferred however well it fits statistically. This reuses the existing
+**Intra-subsystem edges are always allowed** — `cpu_pct → cpu_freq_ratio` and
+`mem_pct → mem_available_mb` are legitimate and both endpoints share a
+subsystem. A metric edge survives if it is intra-subsystem, or if its
+subsystem pair appears above.
+
+So `net_recv_bps → mem_pct` (NET → MEM) is pruned however well it fits
+statistically, while every collected metric still has somewhere to attach.
+
+**Isolated nodes are dropped from ranking, not scored.** After pruning, any node
+with in-degree 0 *and* out-degree 0 is removed from the graph before
+`RootCauseRanker.rank()` runs. This is not cosmetic: `causal_inflow` is computed
+as `1.0 - in_degree/max_in` ([causal_engine.py:370](src/causal_inference/causal_engine.py#L370)),
+so an isolated node scores **1.0** — the maximum — on a 20%-weighted term, and
+pruning would promote precisely the metrics it disconnected. Such metrics are
+still listed in the report as "anomalous, no causal linkage", which is
+informative without polluting the ranking. This reuses the existing
 `DynamicGraphGenerator.refine_causal_graph()` seam; the Jaeger service lookup is
 replaced by a static subsystem adjacency table. Same interface, no new
 component.
@@ -287,16 +498,55 @@ everything is thermally coupled. Physically true, diagnostically useless.
 
 The metric graph explains mechanism; attribution answers who.
 
-1. Take the top-ranked metric from the causal ranker.
+1. Take the top-ranked metric from the causal ranker and map it to a per-process
+   column:
+
+   | Top metric subsystem | Process column |
+   |---|---|
+   | `MEM`, `SWAP` | `rss` |
+   | `CPU`, `LOAD` | `cpu_pct` |
+   | `DISK` | `io_read_delta + io_write_delta` |
+   | `NET`, `POWER` | no per-process signal — attribution skipped, mechanism only |
+
 2. Pull `proc_samples` for the incident window and the 30 minutes preceding it.
-3. Compute each process's delta on the metric's governing resource — Δrss for
-   memory, Δcpu_pct for CPU, Δio_bytes for disk.
-4. Rank by share of the total delta.
-5. If the top process explains <30% of the delta, report **"diffuse — no single
-   process responsible"**.
+   Process identity is `(pid, create_time)`, never `pid` alone.
+3. For each process, baseline = median of its pre-window samples, peak = max
+   within the window, `delta = peak - baseline`.
+4. Rank by share of the **system-level** delta for that metric, not by share of
+   the observed sum (see remainder below).
+5. Report **"diffuse — no single process responsible"** if the top process
+   explains <30%.
 
 Rule 5 matters: memory pressure from forty browser tabs is genuinely diffuse,
 and a system that always names a culprit will confidently name the wrong one.
+
+**Edge cases, all of which otherwise corrupt the percentages:**
+
+| Case | Handling |
+|---|---|
+| Process started during the incident | No pre-window samples, so baseline = 0 and the full peak is its delta. Marked `[started]`. |
+| Process exited during the incident | Delta measured to its last observation. Marked `[exited]` — its contribution is a lower bound. |
+| PID reused | Different `create_time` makes it a different process. Without this a reused PID fabricates a huge delta. |
+| Negative delta (process released memory) | Clamped to 0. A process freeing memory is not a cause of memory pressure, and negatives would inflate everyone else's share. |
+| Cumulative I/O counters | Already stored as per-tick deltas by the collector; counter resets on process restart are written as 0, not negative. |
+| Process outside top-N | Unobserved. Never silently ignored — see remainder. |
+
+**Unattributed remainder.** Shares are computed against the system-level metric
+delta, so observed processes and the remainder sum to 100%:
+
+```
+remainder = system_delta - Σ(observed clamped deltas)
+```
+
+The remainder is displayed as its own line. If it exceeds **40%**, attribution
+confidence is reported as low and the mechanism chain is presented as the
+primary result. This is what stops "chrome.exe, 78% of delta" being asserted
+when the real denominator was only the fifteen processes that happened to be
+sampled.
+
+At 5-minute cadence a 6-minute incident yields ~2 snapshots, which is thin.
+Burst mode (30 s under load) is what makes attribution usable in practice, and
+incidents that never triggered a burst are marked as coarsely sampled.
 
 ### Output
 
@@ -380,7 +630,9 @@ a build failure.
 | Condition | Behaviour |
 |---|---|
 | <3 days baseline | Stage 1 disabled, "collecting — N days remaining" |
-| Laptop slept mid-window | gap >90 s splits the series; no window spans it |
+| Laptop slept mid-window | gap >45 s (1.5x cadence) splits the series; no window spans it |
+| Single dropped tick | 60 s interval counts as a gap; window is split, not bridged |
+| Second collector launched | exits on the mutex; no double-writing |
 | `psutil.NoSuchProcess` mid-tick | skip that process, keep the tick |
 | DB locked | WAL plus retry; collector drops the tick rather than blocking |
 | Disk full | collector stops writing, logs, keeps running |
@@ -398,17 +650,32 @@ cost at test time.
 
 Tests, all covering logic that can silently be wrong:
 
-- gap detection splits windows correctly across a real sleep gap
-- baseline filter excludes windows overlapping a seeded bad event
+- gap detection splits windows across a real sleep gap, **and across a single
+  dropped tick** (60 s interval — the case the original 90 s threshold missed)
+- rate metrics use measured `elapsed_ms`, not assumed cadence: a synthetic
+  delayed tick must not inflate the computed rate
+- first tick after start and after a gap writes `NULL` rates and is excluded
+- baseline filter excludes the full `[T-60min, T+15min]` buffer around a seeded
+  bad event, not merely the overlapping window
+- circularity bound caps exclusions at 20% of history
+- model artifact refuses to load when `feature_order`, `cadence_s`, or
+  `schema_version` disagree with the store
 - incident segmentation merges runs <5 min apart and drops runs <3 windows
-- topology prior prunes a known-implausible edge
-- attribution shares sum to ~1.0, and the <30% case reports "diffuse"
+- every modelled feature has a subsystem (startup assertion)
+- topology prior prunes a known-implausible edge, and isolated nodes are dropped
+  from ranking rather than scored 1.0 on `causal_inflow`
+- attribution: PID reuse with differing `create_time` is treated as two
+  processes; negative deltas clamp to 0; observed shares plus remainder sum to
+  100%; the <30% case reports "diffuse"; the >40% remainder case reports low
+  confidence
+- event redaction rewrites `C:\Users\<name>\` and truncates to 512 chars
 
 ## Explicitly out of scope
 
-- Drift detector for resource exhaustion. Data is collected; the detector gets
-  its own spec once real history exists to tune thresholds against, rather than
-  being guessed blind.
+- Drift detector for **slow** resource exhaustion (disk filling over weeks,
+  memory leak with a rising floor). Acute exhaustion (event 2004) is fully in
+  scope. Data is collected; the drift detector gets its own spec once real
+  history exists to tune thresholds against, rather than being guessed blind.
 - Regime-conditioned modelling. Context columns are collected so this stays
   possible; enabling it is a modelling change, not a collection change.
 - Always-on live monitoring. The architecture keeps it available as a second
