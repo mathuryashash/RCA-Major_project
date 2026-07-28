@@ -1,4 +1,4 @@
-"""Dark theme QSS, palette-matched to the Streamlit dashboard's style.css."""
+"""Dark theme QSS for the desktop application."""
 
 DARK_QSS = """
 QMainWindow, QWidget {
