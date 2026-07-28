@@ -2,7 +2,6 @@
 
 import sqlite3
 
-import networkx as nx
 import pandas as pd
 import pytest
 
@@ -102,6 +101,81 @@ def test_detect_incidents_applies_lookback_to_events_too(tmp_path):
 
     assert len(incidents) == 1
     assert incidents[0].start > pd.Timestamp(ancient, unit="s", tz="UTC")
+
+
+class _StubDetector:
+    """Returns caller-supplied flags so run segmentation can be tested alone.
+
+    Mirrors AnomalyDetector.detect(), which indexes its result from
+    window_size-1 rather than 0 -- the offset that makes label-vs-position
+    confusion easy here.
+    """
+
+    window_size = 5
+
+    def __init__(self, flags):
+        self.flags = flags
+
+    def detect(self, df, feature_columns):
+        index = df.index[self.window_size - 1:]
+        flags = list(self.flags)[: len(index)]
+        flags += [False] * (len(index) - len(flags))     # pad to the full index
+        return pd.DataFrame(
+            {"cpu_pct_is_anomaly": flags, "cpu_pct_score": [1.5 if f else 0.1 for f in flags]},
+            index=index,
+        )
+
+
+def _patch_detector(monkeypatch, flags):
+    monkeypatch.setattr(
+        engine, "load_model_artifact",
+        lambda path: (_StubDetector(flags), _ScalerPassthrough(), ["cpu_pct"]),
+    )
+    monkeypatch.setattr(
+        engine, "model_status", lambda path: engine.ModelStatus(exists=True, age_days=1.0)
+    )
+
+
+class _ScalerPassthrough:
+    def transform(self, frame):
+        return frame.to_numpy(dtype=float)
+
+
+def test_detector_runs_shorter_than_minimum_are_ignored(tmp_path, monkeypatch):
+    """Two consecutive flags is noise, not an incident."""
+    path = _db(tmp_path, rows=40)
+    flags = [False] * 30
+    flags[10:12] = [True, True]
+    _patch_detector(monkeypatch, flags)
+
+    incidents = engine.detect_incidents(path, tmp_path / "m.pt", min_consecutive=3)
+    assert [i for i in incidents if i.trigger == "detector"] == []
+
+
+def test_detector_run_becomes_an_incident_with_correct_bounds(tmp_path, monkeypatch):
+    path = _db(tmp_path, rows=40)
+    flags = [False] * 30
+    flags[10:16] = [True] * 6
+    _patch_detector(monkeypatch, flags)
+
+    detected = [i for i in engine.detect_incidents(path, tmp_path / "m.pt", min_consecutive=3)
+                if i.trigger == "detector"]
+    assert len(detected) == 1
+    # Result index starts at window_size-1 = 4, so flag position 10 is row 14.
+    assert detected[0].start == pd.Timestamp(1_800_000_000 + 14 * 30, unit="s", tz="UTC")
+    assert detected[0].end == pd.Timestamp(1_800_000_000 + 19 * 30, unit="s", tz="UTC")
+    assert detected[0].severity == pytest.approx(1.5)
+
+
+def test_trailing_run_at_end_of_history_is_captured(tmp_path, monkeypatch):
+    """A run still in progress at the last sample must not be dropped."""
+    path = _db(tmp_path, rows=40)
+    flags = [False] * 26 + [True] * 10
+    _patch_detector(monkeypatch, flags)
+
+    detected = [i for i in engine.detect_incidents(path, tmp_path / "m.pt", min_consecutive=3)
+                if i.trigger == "detector"]
+    assert len(detected) == 1
 
 
 def test_evidence_markdown_flags_absence_of_a_causal_chain():

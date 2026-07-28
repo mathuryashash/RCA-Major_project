@@ -155,7 +155,10 @@ def detect_incidents(
                 continue
             clean = segment[features].ffill().bfill()
             scaled = pd.DataFrame(np.clip(scaler.transform(clean), 0.0, 1.0), columns=features)
-            scaled.insert(0, "timestamp", segment["timestamp"].values)
+            # .reset_index, not .values: .values on a tz-aware Series drops the
+            # timezone, and a naive timestamp cannot be compared or merged with
+            # the tz-aware ones the event path produces.
+            scaled.insert(0, "timestamp", segment["timestamp"].reset_index(drop=True))
             scored = detector.detect(scaled, features)
 
             flag_columns = [f"{feature}_is_anomaly" for feature in features if f"{feature}_is_anomaly" in scored]
@@ -171,9 +174,12 @@ def detect_incidents(
             for _, run in flagged.groupby(runs):
                 if not run.iloc[0] or len(run) < min_consecutive:
                     continue
+                # .loc, not .iloc: detect() indexes its result from
+                # window_size-1, so these are labels rather than positions.
+                # They coincide only while `scaled` carries a RangeIndex.
                 incidents.append(Incident(
-                    start=pd.Timestamp(scaled["timestamp"].iloc[run.index[0]]),
-                    end=pd.Timestamp(scaled["timestamp"].iloc[run.index[-1]]),
+                    start=pd.Timestamp(scaled["timestamp"].loc[run.index[0]]),
+                    end=pd.Timestamp(scaled["timestamp"].loc[run.index[-1]]),
                     trigger="detector",
                     label="Anomalous telemetry",
                     severity=float(severity.loc[run.index].max()),
@@ -295,7 +301,7 @@ def preprocess(
     )
 
     incident_scaled = pd.DataFrame(incident_scaled_values, columns=feat_cols)
-    incident_scaled.insert(0, "timestamp", incident_df["timestamp"].values)
+    incident_scaled.insert(0, "timestamp", incident_df["timestamp"].reset_index(drop=True))
 
     return normal_scaled, incident_scaled, scaler
 
@@ -485,7 +491,7 @@ def run_real_rca(
     clean = incident[features].ffill().bfill()
     scaled_values = np.clip(scaler.transform(clean), 0.0, 1.0)
     scaled = pd.DataFrame(scaled_values, columns=features)
-    scaled.insert(0, "timestamp", incident["timestamp"].values)
+    scaled.insert(0, "timestamp", incident["timestamp"].reset_index(drop=True))
     scores, times, active = detect_anomalies(detector, scaled, features)
 
     # Drift is measured here because the model has just been run over this
