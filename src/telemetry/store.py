@@ -1,0 +1,113 @@
+"""SQLite persistence for collected telemetry."""
+
+import sqlite3
+from pathlib import Path
+from typing import Iterable
+
+from . import config
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS samples (
+    ts INTEGER PRIMARY KEY, elapsed_ms INTEGER,
+    cpu_pct REAL, cpu_pct_max_core REAL, cpu_freq_mhz REAL, cpu_freq_ratio REAL,
+    mem_pct REAL, mem_available_mb REAL, swap_pct REAL, swap_used_bytes INTEGER,
+    swap_used_delta INTEGER, disk_read_bps REAL, disk_write_bps REAL,
+    disk_busy_pct REAL, disk_free_pct REAL, net_sent_bps REAL, net_recv_bps REAL,
+    process_count INTEGER, battery_pct REAL, battery_drain_rate REAL,
+    power_plugged INTEGER, on_battery INTEGER, user_idle_sec REAL,
+    foreground_app TEXT, cpu_busy_s_delta REAL, mem_used_bytes INTEGER,
+    disk_read_bytes_delta INTEGER, disk_write_bytes_delta INTEGER
+);
+CREATE TABLE IF NOT EXISTS proc_samples (
+    ts INTEGER NOT NULL, pid INTEGER NOT NULL, create_time REAL NOT NULL,
+    name TEXT, cpu_pct REAL, cpu_time_delta_s REAL, rss INTEGER,
+    io_read_delta INTEGER, io_write_delta INTEGER,
+    UNIQUE(ts, pid, create_time)
+);
+CREATE INDEX IF NOT EXISTS idx_proc_ts ON proc_samples(ts);
+CREATE TABLE IF NOT EXISTS events (
+    ts INTEGER NOT NULL, channel TEXT NOT NULL, record_id INTEGER NOT NULL,
+    provider TEXT, event_id INTEGER, level TEXT, message_redacted TEXT,
+    UNIQUE(channel, record_id)
+);
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+CREATE TABLE IF NOT EXISTS collection_gaps (
+    channel TEXT NOT NULL, start_ts INTEGER, end_ts INTEGER, detected_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+"""
+
+
+def connect(path: Path | str) -> sqlite3.Connection:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), timeout=1.0, isolation_level=None)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+def init_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(_SCHEMA)
+    set_meta(conn, "schema_version", str(config.SCHEMA_VERSION))
+
+
+def get_meta(conn: sqlite3.Connection, key: str, default: str | None = None) -> str | None:
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value),
+    )
+
+
+def insert_sample(conn: sqlite3.Connection, ts: int, row: dict[str, object]) -> None:
+    columns = tuple(row)
+    conn.execute(
+        f"INSERT OR IGNORE INTO samples (ts, {', '.join(columns)}) "
+        f"VALUES ({', '.join('?' for _ in range(len(columns) + 1))})",
+        (ts, *(row[column] for column in columns)),
+    )
+
+
+def insert_proc_samples(conn: sqlite3.Connection, ts: int, rows: Iterable[dict[str, object]]) -> None:
+    rows = list(rows)
+    if not rows:
+        return
+    columns = ("pid", "create_time", "name", "cpu_pct", "cpu_time_delta_s", "rss", "io_read_delta", "io_write_delta")
+    conn.executemany(
+        "INSERT OR IGNORE INTO proc_samples "
+        f"(ts, {', '.join(columns)}) VALUES ({', '.join('?' for _ in range(len(columns) + 1))})",
+        [(ts, *(row[column] for column in columns)) for row in rows],
+    )
+
+
+def sample_count(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
+
+
+def find_gaps(conn: sqlite3.Connection, threshold_s: float | None = None) -> list[tuple[int, int]]:
+    threshold_s = config.gap_threshold_s() if threshold_s is None else threshold_s
+    rows = conn.execute("SELECT ts, LEAD(ts) OVER (ORDER BY ts) FROM samples").fetchall()
+    return [(ts, next_ts) for ts, next_ts in rows if next_ts is not None and next_ts - ts > threshold_s]
+
+
+def purge_proc_samples(conn: sqlite3.Connection, older_than_ts: int) -> int:
+    return conn.execute("DELETE FROM proc_samples WHERE ts < ?", (older_than_ts,)).rowcount
+
+
+def purge_events(conn: sqlite3.Connection, older_than_ts: int) -> int:
+    return conn.execute("DELETE FROM events WHERE ts < ?", (older_than_ts,)).rowcount
+
+
+def record_collection_gap(
+    conn: sqlite3.Connection, channel: str, start_ts: int | None,
+    end_ts: int | None, detected_at: int,
+) -> None:
+    conn.execute(
+        "INSERT INTO collection_gaps(channel, start_ts, end_ts, detected_at) VALUES (?, ?, ?, ?)",
+        (channel, start_ts, end_ts, detected_at),
+    )

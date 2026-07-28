@@ -13,16 +13,14 @@ class AppState:
     normal_df: Optional[pd.DataFrame] = None
     feat_cols: List[str] = field(default_factory=list)
     detector: Any = None  # models.lstm_autoencoder.AnomalyDetector
+    scaler: Any = None
 
-    baseline_days: int = 30
     training_epochs: int = 5
     window_size: int = 12
-    seed: int = 42
 
     last_causal_results: Optional[Dict] = None
     last_root_causes: Optional[List[Dict]] = None
     last_incident_scaled: Optional[pd.DataFrame] = None
     last_anomaly_scores: Optional[Dict[str, float]] = None
     last_anomaly_times: Optional[Dict[str, pd.Timestamp]] = None
-    last_metadata: Optional[Dict] = None
     last_report: Optional[Dict[str, str]] = None

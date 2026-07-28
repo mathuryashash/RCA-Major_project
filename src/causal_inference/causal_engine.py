@@ -40,9 +40,15 @@ class GrangerAnalyzer:
         results  = analyzer.run(anomaly_df, anomalous_metrics)
     """
 
-    def __init__(self, max_lag: int = 10, significance_level: float = 0.05):
+    def __init__(
+        self,
+        max_lag: int = 10,
+        significance_level: float = 0.05,
+        min_effect: float = 0.10,
+    ):
         self.max_lag = max_lag
         self.significance_level = significance_level
+        self.min_effect = min_effect
 
     def _make_stationary(self, series: pd.Series) -> pd.Series:
         """
@@ -79,7 +85,7 @@ class GrangerAnalyzer:
                                   'strength': float}}
             Only pairs where p_value < significance_level are included.
         """
-        results: Dict[Tuple[str, str], Dict] = {}
+        candidates: Dict[Tuple[str, str], Dict] = {}
         metrics = [m for m in anomalous_metrics if m in df.columns]
 
         for cause in metrics:
@@ -111,17 +117,37 @@ class GrangerAnalyzer:
                         if p < best_p:
                             best_p, best_lag = p, lag
 
-                    if best_p < self.significance_level:
-                        results[(cause, effect)] = {
-                            "p_value":     best_p,
-                            "optimal_lag": best_lag,
-                            "strength":    round(1.0 - best_p, 6),
-                        }
+                    # A p-value alone is not enough: negligible improvements
+                    # become "significant" with long local histories.  Use the
+                    # F-test statistic as a bounded, transparent effect proxy.
+                    f_stat = float(gc[best_lag][0]["ssr_ftest"][0])
+                    effect_size = f_stat / (f_stat + len(aligned))
+                    candidates[(cause, effect)] = {
+                        "p_value":     best_p,
+                        "optimal_lag": best_lag,
+                        "effect_size": round(effect_size, 6),
+                        "strength":    round(effect_size, 6),
+                    }
 
                 except Exception:
                     continue  # skip pairs with numerical issues
 
-        return results
+        # Benjamini-Hochberg controls the false-discovery rate over all
+        # ordered metric pairs.  This is important because a laptop can expose
+        # many correlated resource metrics.
+        ordered = sorted(candidates.items(), key=lambda item: item[1]["p_value"])
+        accepted: Dict[Tuple[str, str], Dict] = {}
+        total = len(ordered)
+        cutoff = 0
+        for rank, (_pair, info) in enumerate(ordered, start=1):
+            if info["p_value"] <= self.significance_level * rank / max(total, 1):
+                cutoff = rank
+        for rank, (pair, info) in enumerate(ordered[:cutoff], start=1):
+            if info["effect_size"] < self.min_effect:
+                continue
+            info["fdr_threshold"] = self.significance_level * cutoff / max(total, 1)
+            accepted[pair] = info
+        return accepted
 
 
 # ---------------------------------------------------------------------------
@@ -542,7 +568,7 @@ class CausalInferencePipeline:
 # 6.  Self-test / Demo
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+if False:  # Legacy demo retained for historical reference; it is never run.
     """
     Minimal self-test that uses synthetic metric data to validate the pipeline.
     Requires: numpy, pandas, statsmodels, networkx (all in requirements.txt).

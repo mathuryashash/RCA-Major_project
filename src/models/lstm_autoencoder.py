@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -86,9 +88,15 @@ class AnomalyDetector:
             windows.append(values[i:i + self.window_size])
         return torch.tensor(np.array(windows))
         
-    def train(self, normal_array: np.ndarray, epochs: int = 20, lr: float = 1e-3, 
-              val_split: float = 0.2, batch_size: int = 32):
+    def train(self, normal_array: np.ndarray, epochs: int = 20, lr: float = 1e-3,
+              val_split: float = 0.2, batch_size: int = 32,
+              checkpoint_path: str | Path = "best_autoencoder_model.pt"):
         """Standardized training using early stopping and threshold calibration."""
+        checkpoint_path = Path(checkpoint_path)
+        if len(normal_array) < self.window_size * 3:
+            raise ValueError(
+                f"Need at least {self.window_size * 3} clean samples to train this model."
+            )
         windows = self.create_windows(normal_array, stride=5)
         
         split = int(len(windows) * (1 - val_split))
@@ -123,10 +131,10 @@ class AnomalyDetector:
                 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                torch.save(self.model.state_dict(), 'best_autoencoder_model.pt')
+                torch.save(self.model.state_dict(), checkpoint_path)
                 
         # Load best model for calibration
-        self.model.load_state_dict(torch.load('best_autoencoder_model.pt'))
+        self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
         self._calibrate_thresholds(val_data)
         
     def _validate(self, val_data: torch.Tensor, criterion: nn.Module) -> float:
