@@ -311,6 +311,19 @@ def preprocess(
     return normal_scaled, incident_scaled, scaler
 
 
+#: Beyond this, thread dispatch costs more than the parallelism gains.
+MAX_TORCH_THREADS = 4
+
+
+def _cap_torch_threads() -> int:
+    """Limit torch to MAX_TORCH_THREADS and return what was applied."""
+    import torch
+
+    threads = min(MAX_TORCH_THREADS, os.cpu_count() or MAX_TORCH_THREADS)
+    torch.set_num_threads(threads)
+    return threads
+
+
 def train_model(
     normal_scaled: np.ndarray,
     n_features: int,
@@ -325,6 +338,12 @@ def train_model(
     The model is saved to `model_path` after training so that subsequent
     runs can use skip_train=True for faster iteration.
     """
+    # Torch defaults to one thread per core, which is measurably slower here:
+    # the per-op work is tiny and the LSTM's sequential timesteps limit real
+    # parallelism, so thread dispatch costs more than it saves. Measured 3.9x
+    # slower at 20 threads than at 4 on this model.
+    _cap_torch_threads()
+
     detector = AnomalyDetector(n_features=n_features, window_size=window_size)
     os.makedirs(os.path.dirname(model_path) or ".", exist_ok=True)
 
