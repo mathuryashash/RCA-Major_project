@@ -58,8 +58,15 @@ def main(argv: list[str] | None = None) -> int:
         print("Consent not granted. Run 'python -m telemetry accept-consent' first.", file=sys.stderr)
         return 1
     if args.command == "install":
-        return 0 if schedule.register() else 1
+        if not schedule.register():
+            print("Could not write the startup entry.", file=sys.stderr)
+            return 1
+        started = schedule.start_now()
+        print(f"Registered at {schedule.startup_dir()}. Collection starts at every logon.")
+        print("Collector started now." if started else "Start it now with: python -m telemetry run")
+        return 0
     if not acquire_singleton():
+        print("Another collector is already running; this instance will exit.", file=sys.stderr)
         return 0
     capture_messages = args.capture_messages or store.get_meta(conn, "capture_messages", "0") == "1"
     Collector(conn, capture_messages=capture_messages).run_forever()

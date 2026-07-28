@@ -16,3 +16,30 @@ def test_schedule_source_command_uses_a_launcher(tmp_path, monkeypatch):
     command = schedule.default_command()
     assert "telemetry_launcher.py" in command
     assert (tmp_path / "telemetry_launcher.py").exists()
+
+
+def test_register_writes_and_unregister_removes_startup_entry(tmp_path, monkeypatch):
+    monkeypatch.setattr(schedule.config, "app_dir", lambda: tmp_path)
+    monkeypatch.setattr(schedule, "startup_dir", lambda: tmp_path / "Startup")
+
+    assert schedule.is_registered() is False
+    assert schedule.register() is True
+    assert schedule.is_registered() is True
+
+    body = (tmp_path / "Startup" / "rca-collector.cmd").read_text()
+    assert "telemetry_launcher.py" in body
+
+    assert schedule.unregister() is True
+    assert schedule.is_registered() is False
+
+
+def test_startup_wrapper_quotes_paths_containing_spaces(tmp_path, monkeypatch):
+    """A user profile with a space broke the previous schtasks registration."""
+    spaced = tmp_path / "yashash mathur" / "RCA"
+    monkeypatch.setattr(schedule.config, "app_dir", lambda: spaced)
+    monkeypatch.setattr(schedule, "startup_dir", lambda: tmp_path / "Startup")
+
+    schedule.register()
+    body = (tmp_path / "Startup" / "rca-collector.cmd").read_text()
+    assert '"' in body
+    assert f'"{spaced / "telemetry_launcher.py"}"' in body

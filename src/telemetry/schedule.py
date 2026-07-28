@@ -1,10 +1,26 @@
-"""Task Scheduler integration for the collector."""
+"""Autostart registration for the collector.
 
+Uses the per-user Startup folder rather than Task Scheduler. `schtasks /SC
+ONLOGON` was tried first and fails with "Access is denied" without elevation:
+creating a logon-triggered task is an administrative operation. Prompting for
+UAC to run a diagnostic tool that only reads the local machine is a poor trade,
+and the Startup folder achieves the same thing for the current user with no
+privileges at all.
+
+Everything is invoked through a generated .cmd wrapper. Passing the command
+directly caused a real failure: the interpreter path and the launcher path both
+need quoting, and a user profile containing a space (`C:\\Users\\yashash mathur`)
+made the nested quotes split into separate arguments.
+"""
+
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 from . import config
+
+_CMD_NAME = "rca-collector.cmd"
 
 
 def build_command(executable: str, target: str | None) -> str:
@@ -31,20 +47,56 @@ def default_command() -> str:
     return build_command(sys.executable, str(_source_launcher()))
 
 
-def _run(args: list[str]) -> bool:
-    try:
-        return subprocess.run(args, capture_output=True, text=True, timeout=15).returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
+def startup_dir() -> Path:
+    appdata = os.environ.get("APPDATA")
+    base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+    return base / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+
+
+def _shortcut_path() -> Path:
+    return startup_dir() / _CMD_NAME
 
 
 def register(command: str | None = None) -> bool:
-    return _run(["schtasks", "/Create", "/TN", config.TASK_NAME, "/TR", command or default_command(), "/SC", "ONLOGON", "/F"])
+    """Write a startup wrapper that launches the collector at logon."""
+    command = command or default_command()
+    path = _shortcut_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # `start ""` detaches so the console window closes immediately.
+        path.write_text(
+            "@echo off\r\n"
+            f'start "" /min {command}\r\n',
+            encoding="ascii",
+        )
+    except OSError:
+        return False
+    return path.exists()
 
 
 def unregister() -> bool:
-    return _run(["schtasks", "/Delete", "/TN", config.TASK_NAME, "/F"])
+    try:
+        _shortcut_path().unlink(missing_ok=True)
+    except OSError:
+        return False
+    return not _shortcut_path().exists()
 
 
 def is_registered() -> bool:
-    return _run(["schtasks", "/Query", "/TN", config.TASK_NAME])
+    return _shortcut_path().exists()
+
+
+def start_now(command: str | None = None) -> bool:
+    """Launch the collector immediately, detached from this console."""
+    command = command or default_command()
+    try:
+        subprocess.Popen(
+            command,
+            shell=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError:
+        return False
+    return True

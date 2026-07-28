@@ -23,7 +23,7 @@ Two halves:
 | Decision | Choice | Why |
 |---|---|---|
 | Usage model | Background collector, on-demand analysis | Always-on mode stays possible later as a second consumer of the store |
-| Collector location | Separate process, Task Scheduler at logon | Collecting only while the GUI is open produces a sparse, biased baseline |
+| Collector location | Separate process, per-user Startup folder at logon | Collecting only while the GUI is open produces a sparse, biased baseline. Task Scheduler was tried first and needs elevation — see Autostart |
 | Cadence, system metrics | 30 s | Baseline in ~3 days instead of ~30; short incidents survive |
 | Cadence, per-process | 5 min, bursting to 30 s under load | Measured: per-process enumeration costs ~900 ms (see Measurements) |
 | Failure families collected | performance, crashes, exhaustion, power | Collection is irreversible; detection is not |
@@ -104,7 +104,7 @@ behaviour reads as deliberate rather than as an oversight.
 ┌─────────────────┐         ┌──────────────┐        ┌────────────────────┐
 │ collector.py    │ writes  │ telemetry.db │ reads  │ RCA-Desktop.exe    │
 │ headless, 30s   ├────────>│   (SQLite)   │<───────┤ train / analyze /  │
-│ Task Scheduler  │         │     WAL      │        │ view               │
+│ Startup folder  │         │     WAL      │        │ view               │
 └─────────────────┘         └──────────────┘        └────────────────────┘
 ```
 
@@ -117,6 +117,23 @@ written. SQLite is stdlib, supports a concurrent reader and writer under WAL,
 and survives the collector being killed mid-write.
 
 Location: `%LOCALAPPDATA%\RCA\telemetry.db`.
+
+### Autostart
+
+Registration writes `rca-collector.cmd` into the per-user Startup folder
+(`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`).
+
+`schtasks /SC ONLOGON` was the original choice and does not work unelevated: it
+fails with "Access is denied", because creating a logon-triggered task is an
+administrative operation. Prompting for UAC to run a tool that only reads the
+local machine is a poor trade, and the Startup folder gives the same
+at-every-logon behaviour for the current user with no privileges at all.
+
+A second, separate defect surfaced in the same attempt: the registration
+command embeds both the interpreter path and the launcher path, and a user
+profile containing a space (`C:\Users\yashash mathur`) made the nested quotes
+split into separate arguments. Everything is therefore invoked through a
+generated `.cmd` wrapper rather than a directly-quoted command line.
 
 ### Schema
 
@@ -181,7 +198,7 @@ first tick after any gap.
 
 The collector acquires an exclusive lock (named mutex, released on exit) before
 its first write. A second instance exits immediately rather than double-writing
-the same timestamps. Without this, a stale Task Scheduler entry plus a manual
+the same timestamps. Without this, a stale startup entry plus a manual
 run would produce duplicated rows and doubled rates.
 
 | Table | Rate | Year 1 | Steady state |
@@ -359,7 +376,7 @@ user-only ACL.
 
 The app provides **Delete all collected data**: stops the collector, deletes the
 database and all trained models, and restarts collection from empty. It also
-provides **Disable collection**, which unregisters the Task Scheduler entry.
+provides **Disable collection**, which removes the Startup folder entry.
 
 **Disclosure.** On first run the app states exactly what is collected, where it
 is stored, that it never leaves the machine, and how to delete it. The collector

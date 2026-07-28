@@ -230,7 +230,7 @@ RCA-Major_project/
 │   │   ├── analysis.py                # Baseline selection, gaps, clean windows
 │   │   ├── rates.py                   # Monotonic counter differencing
 │   │   ├── redaction.py               # Best-effort text redaction
-│   │   ├── schedule.py                # Task Scheduler registration
+│   │   ├── schedule.py                # Startup-folder autostart registration
 │   │   └── __main__.py                # CLI: consent, install, run, status, delete
 │   │
 │   ├── data_ingestion/
