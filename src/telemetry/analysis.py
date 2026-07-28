@@ -19,11 +19,38 @@ MODELLED_COLUMNS = (
 BAD_EVENT_IDS = {41, 1000, 1002, 7, 51, 153, 2004}
 
 
+REQUIRED_BASELINE_DAYS = 3.0
+
+
 @dataclass(frozen=True)
 class BaselineStatus:
+    """Whether enough clean telemetry exists to train.
+
+    ``uninterrupted_days`` is the figure that actually gates training: model
+    windows may not bridge a collector gap, so three days scattered across four
+    fragments cannot train a model even though ``clean_days`` reads 3.0.
+    """
+
     clean_samples: int
     clean_days: float
+    uninterrupted_days: float
     ready: bool
+    days_remaining: float
+
+
+@dataclass(frozen=True)
+class Incident:
+    """An observed window worth explaining."""
+
+    start: pd.Timestamp
+    end: pd.Timestamp
+    trigger: str          # "detector" or "event"
+    label: str
+    severity: float = 0.0
+
+    @property
+    def duration_minutes(self) -> float:
+        return (self.end - self.start).total_seconds() / 60.0
 
 
 def load_samples(path: Path | str | None = None) -> pd.DataFrame:
@@ -105,9 +132,74 @@ def modelled_features(samples: pd.DataFrame) -> list[str]:
 
 
 def baseline_status(samples: pd.DataFrame, events: pd.DataFrame) -> BaselineStatus:
+    """Report training readiness against the uninterrupted-segment requirement.
+
+    Readiness deliberately keys off the longest gap-free segment rather than the
+    total clean count: training rejects fragmented history, so reporting "ready"
+    on the total would promise a training run that then fails.
+    """
     clean = clean_baseline(samples, events)
     days = len(clean) * config.SYSTEM_CADENCE_S / 86400
-    return BaselineStatus(len(clean), days, days >= 3)
+
+    segments = contiguous_windows(clean, minimum_samples=1)
+    longest = max((len(segment) for segment in segments), default=0)
+    uninterrupted_days = longest * config.SYSTEM_CADENCE_S / 86400
+
+    return BaselineStatus(
+        clean_samples=len(clean),
+        clean_days=days,
+        uninterrupted_days=uninterrupted_days,
+        ready=uninterrupted_days >= REQUIRED_BASELINE_DAYS,
+        days_remaining=max(0.0, REQUIRED_BASELINE_DAYS - uninterrupted_days),
+    )
+
+
+def event_incidents(events: pd.DataFrame, lead_minutes: int = 30, tail_minutes: int = 5) -> list[Incident]:
+    """Windows defined by a Windows Event Log fault.
+
+    A crash or unexpected shutdown produces no gradual metric anomaly -- the
+    machine simply stops -- so a detector-only design would never surface one.
+    The event defines the window and RCA asks what was abnormal beforehand.
+    """
+    if events.empty or "event_id" not in events:
+        return []
+    bad = events.loc[events["event_id"].isin(BAD_EVENT_IDS)]
+    incidents = []
+    for _, row in bad.iterrows():
+        timestamp = row["timestamp"]
+        provider = row.get("provider") or "Windows event"
+        incidents.append(
+            Incident(
+                start=timestamp - timedelta(minutes=lead_minutes),
+                end=timestamp + timedelta(minutes=tail_minutes),
+                trigger="event",
+                label=f"{provider} {int(row['event_id'])}",
+                severity=1.0,
+            )
+        )
+    return incidents
+
+
+def merge_incidents(incidents: list[Incident], merge_gap_minutes: int = 5) -> list[Incident]:
+    """Collapse overlapping or near-adjacent windows so one episode is one report."""
+    if not incidents:
+        return []
+    ordered = sorted(incidents, key=lambda incident: incident.start)
+    merged = [ordered[0]]
+    for incident in ordered[1:]:
+        last = merged[-1]
+        if incident.start - last.end <= timedelta(minutes=merge_gap_minutes):
+            merged[-1] = Incident(
+                start=last.start,
+                end=max(last.end, incident.end),
+                # An event-defined window is the stronger claim, so it wins.
+                trigger="event" if "event" in (last.trigger, incident.trigger) else last.trigger,
+                label=last.label if last.trigger == "event" else incident.label,
+                severity=max(last.severity, incident.severity),
+            )
+        else:
+            merged.append(incident)
+    return merged
 
 
 def contiguous_windows(samples: pd.DataFrame, minimum_samples: int = 60) -> list[pd.DataFrame]:

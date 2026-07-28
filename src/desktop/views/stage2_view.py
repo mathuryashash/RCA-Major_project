@@ -1,14 +1,19 @@
 """Run RCA over a selected window of observed local telemetry."""
 
+import pandas as pd
+from PySide6.QtCore import QDateTime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout, QSpinBox,
     QPushButton, QProgressBar, QLabel, QTableWidget, QTableWidgetItem,
-    QTabWidget, QFileDialog, QPlainTextEdit,
+    QTabWidget, QFileDialog, QPlainTextEdit, QComboBox, QDateTimeEdit,
 )
 
-from desktop.workers import InferenceWorker
+from desktop.workers import DetectIncidentsWorker, InferenceWorker, model_path
 from desktop.views.graph_panel import PlotlyWebView
+from pipeline import engine
 from pipeline.visualizations import build_timeline_figure, draw_causal_graph
+
+CUSTOM_RANGE = "Custom range …"
 
 
 class Stage2View(QWidget):
@@ -16,22 +21,45 @@ class Stage2View(QWidget):
         super().__init__(parent)
         self.state = state
         self.worker = None
+        self.detect_worker = None
         self._last_payload = None
+        self._model_stale = False
         layout = QVBoxLayout(self)
         self.locked_label = QLabel("Train a telemetry model in Stage 1 first.")
         layout.addWidget(self.locked_label)
         config = QGroupBox("Observed Incident Window")
         form = QFormLayout()
-        self.hours_spin = QSpinBox()
-        self.hours_spin.setRange(1, 168)
-        self.hours_spin.setValue(24)
-        form.addRow("Lookback (hours)", self.hours_spin)
+
+        incident_row = QHBoxLayout()
+        self.incident_combo = QComboBox()
+        self.incident_combo.addItem(CUSTOM_RANGE, None)
+        self.incident_combo.currentIndexChanged.connect(self._on_incident_changed)
+        self.refresh_button = QPushButton("Find Incidents")
+        self.refresh_button.clicked.connect(self._on_refresh_incidents)
+        incident_row.addWidget(self.incident_combo, stretch=3)
+        incident_row.addWidget(self.refresh_button, stretch=1)
+        form.addRow("Detected incident", incident_row)
+
+        self.start_edit = QDateTimeEdit(QDateTime.currentDateTime().addSecs(-24 * 3600))
+        self.end_edit = QDateTimeEdit(QDateTime.currentDateTime())
+        for edit in (self.start_edit, self.end_edit):
+            edit.setCalendarPopup(True)
+            edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        form.addRow("Range start", self.start_edit)
+        form.addRow("Range end", self.end_edit)
+
         self.lag_spin = QSpinBox()
         self.lag_spin.setRange(2, 10)
         self.lag_spin.setValue(5)
         form.addRow("Granger Max Lag", self.lag_spin)
         config.setLayout(form)
         layout.addWidget(config)
+
+        self.model_warning = QLabel("")
+        self.model_warning.setWordWrap(True)
+        self.model_warning.setVisible(False)
+        layout.addWidget(self.model_warning)
+
         self.run_button = QPushButton("Run RCA on Collected Telemetry")
         self.run_button.setObjectName("primaryAction")
         self.run_button.clicked.connect(self._on_run_clicked)
@@ -64,13 +92,92 @@ class Stage2View(QWidget):
         self.set_enabled(False)
 
     def set_enabled(self, enabled):
+        # Only ever called with True after Stage 1 finishes training, so a
+        # freshly trained model clears any latched staleness.
+        if enabled:
+            self._model_stale = False
         self.locked_label.setVisible(not enabled)
-        self.run_button.setEnabled(enabled)
+        self.refresh_button.setEnabled(enabled)
+        self._apply_model_gate(enabled)
+
+    def _apply_model_gate(self, stage_enabled: bool):
+        """Refuse to run RCA without a usable model.
+
+        A missing model is known cheaply. Drift is only known after a run, so a
+        run that reports staleness latches the gate closed until retraining.
+        """
+        status = engine.model_status(model_path())
+        if not status.exists:
+            self.model_warning.setText(
+                f"RCA unavailable — {status.reason} Train a model in Stage 1 first."
+            )
+            self.model_warning.setVisible(True)
+            self.run_button.setEnabled(False)
+            return
+        if self._model_stale:
+            self.model_warning.setText(
+                "RCA disabled — the model no longer matches current usage "
+                f"(reconstruction error drifted past {engine.STALENESS_RATIO}x its "
+                "training-time reference). Retrain in Stage 1."
+            )
+            self.model_warning.setVisible(True)
+            self.run_button.setEnabled(False)
+            return
+        self.model_warning.setVisible(False)
+        self.run_button.setEnabled(stage_enabled)
+
+    def _on_incident_changed(self):
+        """Custom range fields only apply when no detected incident is chosen."""
+        incident = self.incident_combo.currentData()
+        is_custom = incident is None
+        self.start_edit.setEnabled(is_custom)
+        self.end_edit.setEnabled(is_custom)
+        if incident is not None:
+            self.start_edit.setDateTime(QDateTime.fromSecsSinceEpoch(int(incident.start.timestamp())))
+            self.end_edit.setDateTime(QDateTime.fromSecsSinceEpoch(int(incident.end.timestamp())))
+
+    def _on_refresh_incidents(self):
+        self.refresh_button.setEnabled(False)
+        self.status_label.setText("Scanning collected history for incidents …")
+        self.detect_worker = DetectIncidentsWorker()
+        self.detect_worker.finished_ok.connect(self._on_incidents_found)
+        self.detect_worker.failed.connect(self._on_incidents_failed)
+        self.detect_worker.start()
+
+    def _on_incidents_found(self, incidents):
+        self.incident_combo.blockSignals(True)
+        self.incident_combo.clear()
+        for incident in incidents:
+            self.incident_combo.addItem(
+                f"{incident.start:%Y-%m-%d %H:%M}  {incident.duration_minutes:.0f}m  "
+                f"[{incident.trigger}]  {incident.label}",
+                incident,
+            )
+        self.incident_combo.addItem(CUSTOM_RANGE, None)
+        self.incident_combo.blockSignals(False)
+        self.incident_combo.setCurrentIndex(0)
+        self._on_incident_changed()
+        self.status_label.setText(
+            f"{len(incidents)} incident(s) found." if incidents
+            else "No incidents found in the retained history."
+        )
+        self.refresh_button.setEnabled(True)
+
+    def _on_incidents_failed(self, message):
+        self.status_label.setText(f"Incident scan failed: {message}")
+        self.refresh_button.setEnabled(True)
 
     def _on_run_clicked(self):
         self.run_button.setEnabled(False)
         self.progress_bar.setValue(0)
-        self.worker = InferenceWorker(self.hours_spin.value(), self.lag_spin.value())
+        incident = self.incident_combo.currentData()
+        if incident is not None:
+            start, end, trigger = incident.start, incident.end, incident.trigger
+        else:
+            start = pd.Timestamp(self.start_edit.dateTime().toSecsSinceEpoch(), unit="s", tz="UTC")
+            end = pd.Timestamp(self.end_edit.dateTime().toSecsSinceEpoch(), unit="s", tz="UTC")
+            trigger = "custom range"
+        self.worker = InferenceWorker(24, self.lag_spin.value(), start=start, end=end, trigger=trigger)
         self.worker.progress.connect(self._on_progress)
         self.worker.finished_ok.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
@@ -101,12 +208,18 @@ class Stage2View(QWidget):
         self.graph_view.show_figure(draw_causal_graph(graph, root_causes[0]["metric"] if root_causes else ""))
         self.timeline_view.show_figure(build_timeline_figure(payload["incident_scaled"], payload["anomaly_scores"], payload["anomaly_times"]))
         self.report_text.setPlainText(payload["report"]["md_report"])
-        self.status_label.setText("RCA complete")
-        self.run_button.setEnabled(True)
+        evidence = payload.get("evidence", {})
+        self.status_label.setText(
+            f"RCA complete — {evidence.get('surviving_causal_edges', 0)} causal edge(s) "
+            f"survived correction, {evidence.get('attributed_processes', 0)} process(es) attributed."
+        )
+        # Latch the gate closed if this run showed the model has drifted.
+        self._model_stale = bool(payload.get("model_stale"))
+        self._apply_model_gate(True)
 
     def _on_failed(self, message):
         self.status_label.setText(f"Failed: {message}")
-        self.run_button.setEnabled(True)
+        self._apply_model_gate(True)
 
     def _export_md(self):
         if not self._last_payload:
