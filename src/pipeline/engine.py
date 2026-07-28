@@ -212,10 +212,14 @@ def recent_real_window(db_path: str | Path, hours: int = 24) -> Tuple[pd.DataFra
     if samples.empty:
         raise ValueError("No collected telemetry is available for RCA.")
     start = samples["timestamp"].max() - pd.Timedelta(hours=hours)
-    return (
-        samples.loc[samples["timestamp"] >= start].reset_index(drop=True),
-        events.loc[events["timestamp"] >= start - pd.Timedelta(hours=24)].reset_index(drop=True),
+    # load_events only adds a timestamp column to a non-empty frame, so an
+    # empty event table must not be filtered on it. A machine that has logged
+    # no allowlisted events yet is normal, not an error.
+    relevant = (
+        events.loc[events["timestamp"] >= start - pd.Timedelta(hours=24)].reset_index(drop=True)
+        if not events.empty else events
     )
+    return samples.loc[samples["timestamp"] >= start].reset_index(drop=True), relevant
 
 
 def save_model_artifact(
@@ -480,7 +484,10 @@ def run_real_rca(
     contiguous = contiguous_windows(incident, minimum_samples=detector.window_size)
     if not contiguous:
         raise ValueError("The selected incident window contains no uninterrupted model-length segment.")
-    incident = contiguous[-1]
+    # Largest segment, not the last. For an event-triggered incident the
+    # interesting data is *before* the event, so taking the trailing fragment
+    # after a sleep gap would analyse the wrong side of the crash.
+    incident = max(contiguous, key=len)
     if len(incident) < detector.window_size:
         raise ValueError("The selected incident window is shorter than the model window.")
     missing = [feature for feature in features if feature not in incident]

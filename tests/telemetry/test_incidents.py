@@ -124,3 +124,28 @@ def test_merge_handles_empty():
 def test_duration_minutes():
     base = pd.Timestamp("2026-01-01T10:00:00Z")
     assert Incident(base, base + pd.Timedelta(minutes=6), "detector", "x").duration_minutes == 6.0
+
+
+def test_hardware_errors_count_as_faults_without_listed_ids():
+    """WHEA-Logger is allowlisted with no id filter.
+
+    Deriving badness from listed ids alone classified every hardware error as
+    benign: no incident raised, and its lead-up left in the training baseline.
+    """
+    from telemetry.analysis import clean_baseline
+
+    events = pd.DataFrame({
+        "event_id": [17, 19],
+        "provider": ["Microsoft-Windows-WHEA-Logger", "Microsoft-Windows-WindowsUpdateClient"],
+        "timestamp": pd.to_datetime(["2026-01-01T10:00:00Z", "2026-01-01T12:00:00Z"]),
+    })
+
+    incidents = event_incidents(events)
+    assert len(incidents) == 1                       # WHEA only
+    assert "WHEA" in incidents[0].label
+
+    samples = _samples(400)
+    samples["timestamp"] = pd.date_range("2026-01-01T09:30:00Z", periods=400, freq="30s", tz="UTC")
+    cleaned = clean_baseline(samples, events)
+    # The hardware error's lead-up is excluded; the update event's is not.
+    assert len(cleaned) < len(samples) - 1

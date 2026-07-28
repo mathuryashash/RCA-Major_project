@@ -23,6 +23,23 @@ BAD_EVENT_IDS = {
     for event_id in ids
 }
 
+#: Providers whose every event is a fault. These are allowlisted with no id
+#: filter, so deriving badness from listed ids alone would silently classify a
+#: hardware error as benign. The other unfiltered providers
+#: (WindowsUpdateClient, MsiInstaller) are deliberately NOT here: they are
+#: change events, the laptop analogue of a deployment, not failures.
+BAD_EVENT_PROVIDERS = {"Microsoft-Windows-WHEA-Logger"}
+
+
+def is_bad_event(event_id, provider) -> bool:
+    """Whether an event marks a fault worth excluding and explaining."""
+    return event_id in BAD_EVENT_IDS or provider in BAD_EVENT_PROVIDERS
+
+
+def _bad_event_mask(events: pd.DataFrame) -> pd.Series:
+    providers = events["provider"] if "provider" in events else pd.Series("", index=events.index)
+    return events["event_id"].isin(BAD_EVENT_IDS) | providers.isin(BAD_EVENT_PROVIDERS)
+
 
 #: Sequence windows needed before the autoencoder has anything to learn from.
 MIN_TRAINING_WINDOWS = 500
@@ -143,7 +160,7 @@ def clean_baseline(samples: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     usable = usable.dropna(subset=required)
     if events.empty:
         return usable
-    bad = events.loc[events["event_id"].isin(BAD_EVENT_IDS), "timestamp"]
+    bad = events.loc[_bad_event_mask(events), "timestamp"]
     excluded = pd.Series(False, index=usable.index)
     for timestamp in bad:
         excluded |= usable["timestamp"].between(timestamp - timedelta(minutes=60), timestamp + timedelta(minutes=15))
@@ -190,7 +207,7 @@ def event_incidents(events: pd.DataFrame, lead_minutes: int = 30, tail_minutes: 
     """
     if events.empty or "event_id" not in events:
         return []
-    bad = events.loc[events["event_id"].isin(BAD_EVENT_IDS)]
+    bad = events.loc[_bad_event_mask(events)]
     incidents = []
     for _, row in bad.iterrows():
         timestamp = row["timestamp"]

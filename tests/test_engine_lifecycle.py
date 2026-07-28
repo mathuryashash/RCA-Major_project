@@ -221,3 +221,35 @@ def test_evidence_markdown_notes_purged_process_detail():
 
 def test_evidence_markdown_is_empty_without_evidence():
     assert engine._evidence_markdown({}) == ""
+
+
+def test_rca_analyses_the_largest_segment_not_the_trailing_one(tmp_path, monkeypatch):
+    """A gap must not push analysis onto the wrong side of an incident.
+
+    For an event-triggered crash the interesting data is *before* the event, so
+    taking the trailing fragment after a sleep gap analyses the aftermath.
+    """
+    path = _db(tmp_path, rows=60, start_ts=1_800_000_000)
+    # Push a small tail far into the future, creating a gap before it.
+    conn = sqlite3.connect(str(path))
+    conn.execute("UPDATE samples SET ts = ts + 7200 WHERE ts > ?", (1_800_000_000 + 55 * 30,))
+    conn.commit()
+    conn.close()
+
+    captured = {}
+
+    class _Detector(_StubDetector):
+        def detect(self, df, feature_columns):
+            captured["rows"] = len(df)
+            return super().detect(df, feature_columns)
+
+    monkeypatch.setattr(
+        engine, "load_model_artifact",
+        lambda p: (_Detector([False] * 200), _ScalerPassthrough(), ["cpu_pct"]),
+    )
+    monkeypatch.setattr(engine, "model_status", lambda p: engine.ModelStatus(exists=True))
+
+    engine.run_real_rca(path, tmp_path / "m.pt", hours=999)
+
+    # The leading 56-row segment, not the 4-row tail.
+    assert captured["rows"] > 40
