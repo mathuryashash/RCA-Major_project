@@ -36,7 +36,11 @@ class Stage1View(QWidget):
         self.worker = None
         layout = QVBoxLayout(self)
 
-        info = QLabel("Uses only clean samples from the local telemetry collector. At least 3 clean days are required.")
+        info = QLabel(
+            "Trains only on clean samples from the local telemetry collector. "
+            "Windows either side of a crash, a disk fault or a collector gap are excluded, "
+            "and the run must be uninterrupted — a model window cannot span a gap."
+        )
         info.setWordWrap(True)
         layout.addWidget(info)
 
@@ -46,7 +50,7 @@ class Stage1View(QWidget):
         self.uninterrupted_label = QLabel("—")
         self.remaining_label = QLabel("—")
         self.model_label = QLabel("—")
-        status_form.addRow("Clean days collected", self.clean_days_label)
+        status_form.addRow("Clean samples collected", self.clean_days_label)
         status_form.addRow("Longest uninterrupted run", self.uninterrupted_label)
         status_form.addRow("Remaining until trainable", self.remaining_label)
         status_form.addRow("Current model", self.model_label)

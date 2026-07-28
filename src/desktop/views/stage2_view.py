@@ -25,8 +25,6 @@ class Stage2View(QWidget):
         self._last_payload = None
         self._model_stale = False
         layout = QVBoxLayout(self)
-        self.locked_label = QLabel("Train a telemetry model in Stage 1 first.")
-        layout.addWidget(self.locked_label)
         config = QGroupBox("Observed Incident Window")
         form = QFormLayout()
 
@@ -96,7 +94,6 @@ class Stage2View(QWidget):
         # freshly trained model clears any latched staleness.
         if enabled:
             self._model_stale = False
-        self.locked_label.setVisible(not enabled)
         self.refresh_button.setEnabled(enabled)
         self._apply_model_gate(enabled)
 

@@ -22,8 +22,8 @@ class MainWindow(QMainWindow):
         title = QLabel("🔍 AI-Powered Root Cause Analysis")
         title.setObjectName("heroTitle")
         subtitle = QLabel(
-            "Diagnose production failures using LSTM Autoencoders, "
-            "Granger Causality, and Multi-factor Root Cause Scoring"
+            "Diagnose slowdowns, stalls and crashes on this machine using "
+            "LSTM Autoencoders, Granger Causality, and Multi-factor Root Cause Scoring"
         )
         subtitle.setObjectName("heroSubtitle")
         layout.addWidget(title)
@@ -32,7 +32,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.stage1 = Stage1View(self.state)
         self.stage2 = Stage2View(self.state)
-        self.tabs.addTab(self.stage1, "1 — Data Generation && Training")
+        self.tabs.addTab(self.stage1, "1 — Baseline && Training")
         self.tabs.addTab(self.stage2, "2 — Run RCA Inference")
         layout.addWidget(self.tabs)
 
