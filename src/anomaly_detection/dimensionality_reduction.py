@@ -131,28 +131,3 @@ class DimensionalityReducer:
         
         return df_reduced, mapping
 
-if __name__ == "__main__":
-    reducer = DimensionalityReducer(variance_threshold=0.01, correlation_threshold=0.9)
-    
-    # 50 data points
-    timestamps = pd.date_range("2023-01-01", periods=50, freq="1min")
-    
-    # Base signal
-    signal = np.sin(np.linspace(0, 10, 50))
-    
-    df = pd.DataFrame({
-        "timestamp": timestamps,
-        "flatline": np.ones(50),                         # Zero variance
-        "metric_a": signal,                              # Rep
-        "metric_a_copy": signal + np.random.normal(0, 0.05, 50), # Highly correlated
-        "metric_b": np.cos(np.linspace(0, 10, 50)),      # Independent
-    })
-    
-    print(f"Original shape: {df.shape}")
-    
-    reduced_df, mapping = reducer.reduce(df)
-    
-    print(f"\nReduced shape: {reduced_df.shape}")
-    print("\nRepresentative Mapping:")
-    for rep, group in mapping.items():
-        print(f"  {rep} represents: {group}")

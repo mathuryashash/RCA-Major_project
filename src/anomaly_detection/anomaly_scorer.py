@@ -111,22 +111,3 @@ class AnomalyDetector:
         res_df = pd.DataFrame(results, index=result_idx)
         return res_df
 
-if __name__ == "__main__":
-    import sys
-    import os
-    # Add parent dir to path to find synthetic generator if run standalone
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from data_ingestion.synthetic_generator import SyntheticMetricsGenerator
-    
-    print("Testing pipeline from Synthetic Data to Autoencoder...")
-    gen = SyntheticMetricsGenerator()
-    normal_data = gen.generate_normal_behavior(duration_days=30)
-    
-    # Exclude timestamp
-    feat_cols = [c for c in normal_data.columns if c != 'timestamp']
-    # Normally we'd use a StandardScaler here in a real pipeline
-    
-    detector = AnomalyDetector(n_features=len(feat_cols), window_size=12, device='cpu')
-    print("Training Anomaly Detector on 30 days of baseline data...")
-    detector.train(normal_data[feat_cols].values, epochs=5) # few epochs for test
-    print("Thresholds calibrated successfully!")

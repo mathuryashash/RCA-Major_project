@@ -84,32 +84,3 @@ class CausalDiscoveryEngine:
         G.remove_edges_from(edges_to_remove)
         return G
 
-
-if __name__ == "__main__":
-    import numpy as np
-    
-    # Generate some confounded/causal data for test
-    n_samples = 500
-    x = np.random.randn(n_samples)
-    y = 0.5 * x + np.random.randn(n_samples) * 0.1 # x -> y
-    z = 0.8 * y + np.random.randn(n_samples) * 0.1 # y -> z
-    
-    df = pd.DataFrame({'X': x, 'Y': y, 'Z': z})
-    metrics = ['X', 'Y', 'Z']
-    
-    engine = CausalDiscoveryEngine(alpha=0.05)
-    print("Running PC Algorithm...")
-    graph = engine.learn_causal_structure_pc(df, metrics)
-    
-    print("Learned Graph Edges:", graph.edges(data=True))
-    
-    # Test temporal precedence
-    # Assume we detected Z first (wrong), Y next, X last
-    timestamps = {
-        'Z': pd.Timestamp('2024-01-01 10:00:00'),
-        'Y': pd.Timestamp('2024-01-01 10:05:00'),
-        'X': pd.Timestamp('2024-01-01 10:10:00')
-    }
-    
-    filtered_graph = engine.temporal_precedence_filter(graph, timestamps)
-    print("Filtered Edges (Should drop violations):", filtered_graph.edges())

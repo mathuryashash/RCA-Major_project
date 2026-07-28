@@ -120,23 +120,3 @@ class GrangerCausalityAnalyzer:
             
         return G
 
-if __name__ == "__main__":
-    import numpy as np
-    # Quick test
-    analyzer = GrangerCausalityAnalyzer(max_lag=3)
-    
-    # Create synthetic data where A causes B with lag 1
-    t = np.arange(100)
-    A = np.sin(t) + np.random.normal(0, 0.1, 100)
-    B = np.zeros(100)
-    B[1:] = A[:-1] * 2 + np.random.normal(0, 0.1, 99)
-    
-    df = pd.DataFrame({'A': A, 'B': B})
-    
-    print("Testing Granger Causality Analyzer...")
-    res = analyzer.test_causality(df, ['A', 'B'])
-    print(f"Results: {res}")
-    
-    graph = analyzer.build_causal_graph(res)
-    print(f"Graph nodes: {graph.nodes()}")
-    print(f"Graph edges: {graph.edges(data=True)}")

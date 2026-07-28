@@ -54,13 +54,20 @@ Tests mirror this one-to-one under `tests/telemetry/`.
 **Files:**
 - Create: `src/telemetry/__init__.py`
 - Create: `src/telemetry/config.py`
+- Create: `src/telemetry/logsetup.py`
 - Create: `src/telemetry/store.py`
+- Create: `tests/conftest.py`
 - Create: `tests/telemetry/__init__.py`
 - Test: `tests/telemetry/test_store.py`
 
+**Note:** this repo has no `pyproject.toml` and is not installed; existing tests
+insert `../src` into `sys.path` by hand at the top of each file. A single
+`tests/conftest.py` does it once for every test in the suite, so no test file
+below needs path boilerplate.
+
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `config.SYSTEM_CADENCE_S`, `config.PROCESS_CADENCE_S`,
+- Produces: `logsetup.get_logger(name)`, `config.SYSTEM_CADENCE_S`, `config.PROCESS_CADENCE_S`,
   `config.PROCESS_BURST_CADENCE_S`, `config.EVENT_POLL_S`,
   `config.GAP_FACTOR`, `config.gap_threshold_s()`, `config.TOP_N`,
   `config.BURST_CPU_PCT`, `config.BURST_MEM_PCT`, `config.BURST_DISK_BUSY_PCT`,
@@ -71,7 +78,22 @@ Tests mirror this one-to-one under `tests/telemetry/`.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/telemetry/__init__.py` as an empty file, then `tests/telemetry/test_store.py`:
+Create `tests/conftest.py`:
+
+```python
+"""Make `src/` importable for the whole suite.
+
+This repo is not pip-installed and has no pyproject.toml, so without this every
+test file would need its own sys.path insertion.
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+```
+
+Create `tests/telemetry/__init__.py` as an empty file, then
+`tests/telemetry/test_store.py`:
 
 ```python
 import sqlite3
@@ -181,6 +203,9 @@ EVENT_CHANNELS = ("System", "Application")
 MUTEX_NAME = "Local\\RCATelemetryCollector"
 TASK_NAME = "RCA Telemetry Collector"
 
+LOG_MAX_BYTES = 1_000_000
+LOG_BACKUPS = 2
+
 
 def gap_threshold_s() -> float:
     return SYSTEM_CADENCE_S * GAP_FACTOR
@@ -193,6 +218,52 @@ def app_dir() -> Path:
 
 def db_path() -> Path:
     return app_dir() / "telemetry.db"
+
+
+def log_path() -> Path:
+    return app_dir() / "collector.log"
+
+
+def stop_flag_path() -> Path:
+    return app_dir() / "stop.flag"
+```
+
+`src/telemetry/logsetup.py`:
+
+```python
+"""Local rotating log.
+
+The collector runs headless under Task Scheduler with nowhere to print, so a
+swallowed exception is an invisible one. Disk-full, database-locked and Event
+Log failures all land here.
+"""
+import logging
+from logging.handlers import RotatingFileHandler
+
+from . import config
+
+_configured = False
+
+
+def get_logger(name: str) -> logging.Logger:
+    global _configured
+    logger = logging.getLogger(name)
+    if not _configured:
+        config.app_dir().mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            config.log_path(),
+            maxBytes=config.LOG_MAX_BYTES,
+            backupCount=config.LOG_BACKUPS,
+            encoding="utf-8",
+        )
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        root = logging.getLogger("telemetry")
+        root.setLevel(logging.INFO)
+        root.addHandler(handler)
+        _configured = True
+    return logger
 ```
 
 `src/telemetry/store.py`:
@@ -1381,6 +1452,49 @@ def test_watermark_reset_records_a_collection_gap(tmp_path):
         "SELECT channel FROM collection_gaps WHERE channel='System'"
     ).fetchall()
     assert gaps, "expected a collection_gaps row after watermark reset"
+
+
+def test_invalidated_watermark_resets_to_current_end_not_zero(tmp_path):
+    """Resetting to 0 would replay the entire retained log as newly observed."""
+    conn = store.connect(tmp_path / "t.db")
+    store.init_schema(conn)
+    reader = EventLogReader("System")
+    newest = reader.newest_record_id()
+    if newest is None:
+        pytest.skip("System channel is empty on this machine")
+    store.set_meta(conn, watermark_key("System"), str(10**15))
+    reader.read_new(conn, limit=20)
+    assert int(store.get_meta(conn, watermark_key("System"))) == newest
+    assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+
+
+def test_transient_failure_preserves_watermark(tmp_path, monkeypatch):
+    """A temporary access error must not rewind ingestion."""
+    conn = store.connect(tmp_path / "t.db")
+    store.init_schema(conn)
+    reader = EventLogReader("System")
+    store.set_meta(conn, watermark_key("System"), "12345")
+
+    def boom(*args, **kwargs):
+        raise OSError("access denied")
+
+    monkeypatch.setattr(reader, "newest_record_id", lambda: 99999)
+    monkeypatch.setattr(reader, "_query", boom)
+
+    assert reader.read_new(conn, limit=20) == 0
+    assert store.get_meta(conn, watermark_key("System")) == "12345"
+    assert conn.execute("SELECT COUNT(*) FROM collection_gaps").fetchone()[0] == 0
+
+
+def test_unreadable_channel_preserves_watermark(tmp_path):
+    """newest_record_id() failing is not proof of invalidation."""
+    conn = store.connect(tmp_path / "t.db")
+    store.init_schema(conn)
+    store.set_meta(conn, watermark_key("System"), "777")
+    reader = EventLogReader("Nonexistent-Channel-Xyz")
+    store.set_meta(conn, watermark_key("Nonexistent-Channel-Xyz"), "777")
+    assert reader.read_new(conn, limit=5) == 0
+    assert store.get_meta(conn, watermark_key("Nonexistent-Channel-Xyz")) == "777"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1510,21 +1624,30 @@ class EventLogReader:
 
         watermark = int(store.get_meta(conn, watermark_key(self.channel), "0"))
 
-        # A watermark ahead of the newest record means the log was cleared,
-        # wrapped, or recreated. This does NOT raise -- the query is perfectly
-        # valid and simply matches nothing -- so it has to be checked
-        # explicitly, or the channel would silently stop ingesting forever.
         newest = self.newest_record_id()
-        if newest is not None and watermark > newest:
-            self._reset_watermark(conn, watermark)
-            watermark = 0
+        if newest is None:
+            # Channel empty, or unreadable right now. Neither is proof that the
+            # watermark is invalid, so leave it alone and try again next poll.
+            _log.info("channel %s returned no newest record; watermark kept at %d",
+                      self.channel, watermark)
+            return 0
+
+        # A watermark ahead of the newest record is proof the log was cleared,
+        # wrapped, or recreated. This does NOT raise -- the query is perfectly
+        # valid and simply matches nothing -- so it must be checked explicitly,
+        # or the channel would silently stop ingesting forever.
+        if watermark > newest:
+            self._reset_to_end(conn, previous=watermark, newest=newest)
+            return 0
 
         try:
             handle = self._query(watermark)
         except Exception:
-            # Channel unreadable for another reason: record the gap rather than
-            # re-ingesting the whole log or silently skipping.
-            self._reset_watermark(conn, watermark)
+            # Transient: access denied, service restarting, handle exhaustion.
+            # Preserve the watermark. Resetting here would replay the entire
+            # retained log as if newly observed.
+            _log.exception("transient query failure on %s; watermark preserved at %d",
+                           self.channel, watermark)
             return 0
 
         parsed: list[dict] = []
@@ -1569,14 +1692,22 @@ class EventLogReader:
             raise
         return len(rows)
 
-    def _reset_watermark(self, conn, previous: int) -> None:
+    def _reset_to_end(self, conn, previous: int, newest: int) -> None:
+        """Recover from a proven-invalid watermark.
+
+        Resets to the CURRENT END of the log, never to 0: starting from 0 would
+        re-ingest every retained record as if newly observed, backdating a
+        month of events into the middle of an unrelated analysis window.
+        Everything between the last event we stored and now is genuinely lost,
+        so it is recorded as a coverage gap.
+        """
         now = int(time.time())
         last_ts = conn.execute(
             "SELECT MAX(ts) FROM events WHERE channel = ?", (self.channel,)
         ).fetchone()[0]
         conn.execute("BEGIN")
         try:
-            store.set_meta(conn, watermark_key(self.channel), "0")
+            store.set_meta(conn, watermark_key(self.channel), str(newest))
             store.record_collection_gap(
                 conn, self.channel, start_ts=last_ts, end_ts=now, detected_at=now
             )
@@ -1584,6 +1715,11 @@ class EventLogReader:
         except Exception:
             conn.execute("ROLLBACK")
             raise
+        _log.warning(
+            "watermark for %s was %d but newest record is %d; log was cleared or"
+            " wrapped. Reset to %d and recorded a coverage gap.",
+            self.channel, previous, newest, newest,
+        )
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**

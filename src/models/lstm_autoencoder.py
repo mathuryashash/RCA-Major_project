@@ -183,4 +183,4 @@ if __name__ == "__main__":
     # Test harness
     print("Testing LSTM Autoencoder Model Initialization...")
     model = AnomalyDetector(n_features=10)
-    print("Success. Run synthetic_generator.py -> training pipeline for further usage.")
+    print("Success. Collect telemetry with 'python -m telemetry run', then train.")

@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" />
   <img src="https://img.shields.io/badge/PyTorch-2.0+-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white" />
-  <img src="https://img.shields.io/badge/Streamlit-1.25+-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white" />
+  <img src="https://img.shields.io/badge/PySide6-Qt%206-41CD52?style=for-the-badge&logo=qt&logoColor=white" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" />
 </p>
 
@@ -15,7 +15,7 @@
   <a href="#-features">Features</a> •
   <a href="#%EF%B8%8F-architecture">Architecture</a> •
   <a href="#-quick-start">Quick Start</a> •
-  <a href="#-dashboard">Dashboard</a> •
+  <a href="#%EF%B8%8F-desktop-app-pyside6">Desktop App</a> •
   <a href="#-methodology">Methodology</a> •
   <a href="#-project-structure">Project Structure</a>
 </p>
@@ -24,11 +24,11 @@
 
 ## 📌 Overview
 
-Modern distributed systems generate thousands of metrics — when something breaks, manually sifting through dashboards to find the root cause is slow and error-prone. This project automates that process.
+When a machine slows down, stalls, or crashes, finding out why means manually correlating resource graphs against event logs — slow and error-prone. This project automates that, using telemetry collected from the machine it runs on.
 
 The **AI-Powered RCA System** takes multivariate time-series metrics, detects anomalies using deep learning, constructs causal graphs using statistical and constraint-based methods, and produces a **ranked list of root causes** with confidence scores and evidence chains.
 
-> **Built as a Major Project** — designed to demonstrate end-to-end ML pipeline engineering, from data generation to interactive deployment.
+> **Built as a Major Project** — demonstrates end-to-end ML pipeline engineering, from real telemetry collection to a packaged desktop application.
 
 ---
 
@@ -40,10 +40,10 @@ The **AI-Powered RCA System** takes multivariate time-series metrics, detects an
 | 📊 **Ensemble Detection** | Combines LSTM (40%), Statistical (35%), and Temporal (25%) detectors to reduce false positives |
 | 🔗 **Causal Inference** | Granger Causality tests + Peter-Clark (PC) algorithm for structure learning |
 | 🏆 **Root Cause Ranking** | Multi-factor composite scoring with PageRank-augmented graph influence |
-| 🎯 **Failure Simulation** | 6 realistic failure scenarios with configurable severity for validation |
+| 🎯 **Incident Discovery** | Incidents found from the detector or triggered by Event Log faults — never injected |
 | 📉 **Dimensionality Reduction** | Flatline filtering + hierarchical correlation grouping for high-cardinality metrics |
-| 🔄 **Concept Drift Handling** | Automated model fine-tuning after deployments (soak period detection) |
-| 🖥️ **Interactive Dashboard** | Streamlit UI with live training, causal graph visualization, and downloadable reports |
+| 🔄 **Model Staleness** | Warns and offers retraining when reconstruction error drifts from its training-time reference |
+| 🖥️ **Desktop App** | PySide6 UI with live training, causal graph visualization, and downloadable reports |
 
 ---
 
@@ -57,10 +57,10 @@ The **AI-Powered RCA System** takes multivariate time-series metrics, detects an
 │  │    Data       │    │   Anomaly    │    │   Causal Inference    │  │
 │  │  Ingestion    │───▶│  Detection   │───▶│                       │  │
 │  │              │    │              │    │  • Granger Causality  │  │
-│  │ • Synthetic  │    │ • LSTM AE    │    │  • PC Algorithm       │  │
-│  │ • Prometheus │    │ • Statistical│    │  • Event Correlation  │  │
-│  │ • CloudWatch │    │ • Temporal   │    │  • Graph Builder      │  │
-│  │ • Logs       │    │ • Ensemble   │    │                       │  │
+│  │ • psutil     │    │ • LSTM AE    │    │  • PC Algorithm       │  │
+│  │ • Event Log  │    │ • Statistical│    │  • Event Correlation  │  │
+│  │ • SQLite     │    │ • Temporal   │    │  • Topology Prior     │  │
+│  │   store      │    │ • Ensemble   │    │  • Graph Builder      │  │
 │  └──────────────┘    └──────────────┘    └───────────┬───────────┘  │
 │                                                       │             │
 │                                          ┌───────────▼───────────┐  │
@@ -76,7 +76,7 @@ The **AI-Powered RCA System** takes multivariate time-series metrics, detects an
 │                                          ┌───────────▼───────────┐  │
 │                                          │     Reporting         │  │
 │                                          │                       │  │
-│                                          │  • Streamlit UI       │  │
+│                                          │  • PySide6 Desktop UI │  │
 │                                          │  • MD/JSON Reports    │  │
 │                                          │  • Causal Graph Viz   │  │
 │                                          └───────────────────────┘  │
@@ -103,49 +103,39 @@ cd RCA-Major_project
 pip install -r requirements.txt
 ```
 
-### Run the Dashboard
+### Run the desktop application
 
 ```bash
-cd src
-streamlit run reporting/dashboard.py
+python src/desktop/main.py
 ```
 
-The dashboard will open at `http://localhost:8501`.
-
----
-
-## 🖥️ Dashboard
-
-The interactive Streamlit dashboard provides a two-stage workflow:
-
-### Stage 1 — Data Generation & Training
-- Generate synthetic normal-behavior metrics (configurable duration)
-- Train the LSTM Autoencoder with real-time progress
-- Visualize baseline metric patterns
-
-### Stage 2 — RCA Inference
-- Inject one of **6 failure scenarios** with adjustable severity
-- Run the full 5-step pipeline automatically:
-  1. Data Generation (normal + failure)
-  2. Preprocessing & Scaling
-  3. LSTM Autoencoder Training
-  4. Anomaly Detection
-  5. Causal Inference & Root Cause Ranking
-- View results across 5 tabs:
-  - 🏆 **Root Causes** — Ranked table with ground truth comparison
-  - 🕸️ **Causal Graph** — Interactive Plotly visualization
-  - 📊 **Anomaly Timeline** — Top-5 anomalous metric trends
-  - 📄 **Markdown Report** — Human-readable incident summary
-  - 🗂️ **JSON Report** — Machine-readable output (downloadable)
+Start the opt-in collector first, then train from three clean days of local
+telemetry in Stage 1 and run RCA over an observed time window in Stage 2.
 
 ---
 
 ## 🖥️ Desktop App (PySide6)
 
-A native desktop version of the dashboard, built with PySide6 (Qt 6). Same
-pipeline engine as the Streamlit dashboard and the CLI — shared via
-`src/pipeline/engine.py` — with native widgets for controls/tables and an
-embedded, fully offline Plotly view for the causal graph and anomaly timeline.
+A native desktop application built with PySide6 (Qt 6), sharing the pipeline
+engine with the CLI via `src/pipeline/engine.py`. Native widgets for controls
+and tables, with an embedded fully offline Plotly view for the causal graph and
+anomaly timeline.
+
+### Stage 1 — Baseline & Training
+- Shows collection status: clean days available, days remaining
+- Trains the LSTM Autoencoder once a clean 3-day baseline exists
+- Writes a versioned model artifact (feature order, scaler, thresholds)
+
+### Stage 2 — RCA Inference
+- Analyses an observed window of real telemetry
+- Runs the pipeline: preprocessing → anomaly detection → Granger causality
+  (BH-FDR corrected) → topology pruning → root-cause ranking → attribution
+- Results: ranked root causes, causal graph, anomaly timeline, and Markdown
+  and JSON reports
+
+> Reports state evidence honestly — there is no ground truth for a real
+> incident. Confidence comes from the composite score, attribution coverage,
+> and how many causal edges survived correction.
 
 ### Run from source
 
@@ -232,16 +222,23 @@ The heuristic score is blended with **PageRank** on the reversed causal graph (7
 ```
 RCA-Major_project/
 ├── src/
+│   ├── telemetry/                      # Real telemetry collection (no synthetic data)
+│   │   ├── collector.py               # Sampling loop, burst logic, consent gate
+│   │   ├── sampler.py                 # psutil system + per-process snapshots
+│   │   ├── eventlog.py                # Windows Event Log, per-channel watermark
+│   │   ├── store.py                   # SQLite schema and read/write APIs
+│   │   ├── analysis.py                # Baseline selection, gaps, clean windows
+│   │   ├── rates.py                   # Monotonic counter differencing
+│   │   ├── redaction.py               # Best-effort text redaction
+│   │   ├── schedule.py                # Task Scheduler registration
+│   │   └── __main__.py                # CLI: consent, install, run, status, delete
+│   │
 │   ├── data_ingestion/
-│   │   ├── synthetic_generator.py     # Generates normal + failure metrics
-│   │   ├── prometheus_connector.py    # Prometheus integration
-│   │   ├── cloudwatch_connector.py    # AWS CloudWatch integration
-│   │   ├── log_integrator.py          # Log data ingestion
-│   │   └── imputer.py                 # Missing data imputation
+│   │   ├── log_integrator.py          # Log data ingestion (unused, see note)
+│   │   └── imputer.py                 # Missing data imputation (unused, see note)
 │   │
 │   ├── models/
-│   │   ├── lstm_autoencoder.py        # LSTM Autoencoder + AnomalyDetector
-│   │   └── concept_drift_handler.py   # Post-deployment model fine-tuning
+│   │   └── lstm_autoencoder.py        # LSTM Autoencoder + AnomalyDetector
 │   │
 │   ├── anomaly_detection/
 │   │   ├── anomaly_scorer.py          # LSTM-based anomaly scoring
@@ -253,32 +250,46 @@ RCA-Major_project/
 │   │   ├── causal_engine.py           # Full causal pipeline orchestrator
 │   │   ├── granger_causality.py       # Pairwise Granger tests
 │   │   ├── pc_algorithm.py            # PC algorithm (causal-learn)
-│   │   ├── dynamic_graph.py           # Dynamic graph updates
-│   │   ├── deployment_listener.py     # Deployment event tracking
-│   │   └── jaeger_connector.py        # Distributed tracing integration
+│   │   └── dynamic_graph.py           # Subsystem topology prior
 │   │
 │   ├── root_cause_ranking/
 │   │   └── scorer.py                  # Multi-factor composite scorer
 │   │
 │   ├── reporting/
-│   │   ├── dashboard.py               # Streamlit interactive dashboard
-│   │   ├── report_generator.py        # Markdown report builder
-│   │   └── anomaly_simulator.py       # Simulation utilities
+│   │   └── report_generator.py        # Markdown report builder
+│   │
+│   ├── pipeline/
+│   │   ├── engine.py                  # Shared GUI-agnostic pipeline
+│   │   └── visualizations.py          # Plotly figure builders
+│   │
+│   ├── desktop/                        # PySide6 desktop app
+│   │   ├── main_window.py             # Two-stage window shell
+│   │   ├── workers.py                 # QThread training / RCA workers
+│   │   ├── views/                     # Stage 1 and Stage 2 panels
+│   │   └── theme.py                   # Qt stylesheet
 │   │
 │   └── train_and_run.py               # CLI training + inference script
 │
-├── rca-system/                         # Alternate modular implementation
-│   ├── src/                            # Preprocessing pipeline, configs
-│   └── tests/                          # Unit & integration tests
+├── packaging/
+│   ├── rca_desktop.spec               # PyInstaller spec
+│   ├── excludes.txt                   # Generated module exclude list
+│   ├── hooks/hook-torch.py            # torch 2.12 Windows build workaround
+│   └── build.ps1                      # Build script
 │
-├── .streamlit/
-│   └── config.toml                     # Streamlit deployment config
+├── docs/superpowers/
+│   ├── specs/                          # Approved design documents
+│   └── plans/                          # Implementation plans
 │
 ├── Dockerfile                          # Container deployment
 ├── requirements.txt                    # Python dependencies (CPU-optimized)
-├── packages.txt                        # System dependencies (Streamlit Cloud)
-└── best_autoencoder_model.pt           # Pre-trained model weights
+└── best_autoencoder_model.pt           # Legacy weights, superseded by the
+                                        # versioned artifact in %LOCALAPPDATA%\RCA
 ```
+
+> **Note:** `data_ingestion/log_integrator.py` and `data_ingestion/imputer.py`
+> are currently unused — the telemetry collector reads the Event Log directly.
+> They are kept rather than deleted because nothing in the current design
+> replaces their intent.
 
 ---
 
@@ -297,14 +308,28 @@ RCA-Major_project/
 
 ---
 
+## Telemetry collector
+
+The RCA pipeline can collect real laptop telemetry locally. Collection is opt-in;
+window titles are never captured and data is never sent over the network.
+
+```powershell
+python -m telemetry accept-consent
+python -m telemetry install
+python -m telemetry status
+python -m telemetry uninstall
+python -m telemetry delete-all-data
+```
+
+Training requires about three days of collected samples. Event message text is
+off by default; use `python -m telemetry run --capture-messages` only when you
+explicitly want redacted EventData values retained locally.
+
 ## 🌐 Deployment
 
-### Streamlit Community Cloud (Recommended)
-
-1. Push to GitHub
-2. Go to [share.streamlit.io](https://share.streamlit.io)
-3. Connect your repo → Branch: `main` → File: `src/reporting/dashboard.py`
-4. Deploy!
+> **Note:** this application analyses telemetry from the machine it runs on,
+> so it is distributed as a desktop build rather than hosted. See
+> `packaging/build.ps1` for the Windows executable.
 
 ### Docker
 
@@ -322,9 +347,9 @@ docker run -p 8501:8501 rca-system
 | Deep Learning | PyTorch (LSTM Autoencoder) |
 | Causal Inference | statsmodels (Granger), causal-learn (PC Algorithm) |
 | Graph Analysis | NetworkX + PageRank |
-| Dashboard | Streamlit + Plotly |
+| Desktop UI | PySide6 (Qt 6) + Plotly |
 | Data Processing | Pandas, NumPy, scikit-learn |
-| Monitoring Connectors | Prometheus, AWS CloudWatch, Jaeger |
+| Telemetry Sources | psutil, Windows Event Log (pywin32), SQLite |
 
 ---
 
@@ -335,5 +360,5 @@ This project is developed as part of a college major project.
 ---
 
 <p align="center">
-  <b>Built with ❤️ using PyTorch, Streamlit, and Causal Inference</b>
+  <b>Built with ❤️ using PyTorch, PySide6, and Causal Inference</b>
 </p>
