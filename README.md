@@ -200,9 +200,9 @@ src/
 │   ├── analysis.py      #   baseline selection, gaps, incidents
 │   └── schedule.py      #   autostart registration
 ├── models/              # LSTM autoencoder
-├── anomaly_detection/   # scoring, ensemble, dampening
-├── causal_inference/    # Granger, PC algorithm, topology prior
-├── root_cause_ranking/  # multi-factor scorer
+├── anomaly_detection/   # active ensemble detector
+├── causal_inference/    # Granger-based causal engine and topology prior
+├── reporting/           # RCA report generation
 ├── pipeline/            # shared GUI-agnostic engine
 └── desktop/             # PySide6 application
 ```
