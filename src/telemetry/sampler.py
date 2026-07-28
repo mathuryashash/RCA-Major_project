@@ -14,8 +14,77 @@ SAMPLE_COLUMNS = (
     "battery_drain_rate", "power_plugged", "on_battery", "user_idle_sec",
     "foreground_app", "cpu_busy_s_delta", "mem_used_bytes",
     "disk_read_bytes_delta", "disk_write_bytes_delta",
+    "gpu_util_pct", "gpu_mem_used_bytes", "gpu_temp_c",
 )
+
+#: Used to migrate an existing database when a channel is added.
+SAMPLE_COLUMN_TYPES = {
+    column: ("TEXT" if column == "foreground_app" else "REAL")
+    for column in SAMPLE_COLUMNS
+}
+
 _IS_WINDOWS = hasattr(ctypes, "windll")
+
+# NVML is the only temperature source available here: psutil's
+# sensors_temperatures() returns None on Windows. It is optional -- a machine
+# with no NVIDIA GPU simply records NULL for these channels.
+from .logsetup import get_logger
+
+_LOGGER = get_logger(__name__)
+
+try:
+    import pynvml
+
+    pynvml.nvmlInit()
+    _NVML_READY = pynvml.nvmlDeviceGetCount() > 0
+    _LOGGER.info("NVML ready: %s device(s)", pynvml.nvmlDeviceGetCount())
+except Exception as exc:  # noqa: BLE001 - absent driver, no GPU, or NVML load failure
+    pynvml, _NVML_READY = None, False
+    _LOGGER.warning("NVML unavailable, GPU channels will be NULL: %r", exc)
+
+_GPU_ERROR_LOGGED = False
+
+_NO_GPU = {"gpu_util_pct": None, "gpu_mem_used_bytes": None, "gpu_temp_c": None}
+
+
+def _read_gpu() -> dict[str, float | None]:
+    handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+    return {
+        "gpu_util_pct": float(pynvml.nvmlDeviceGetUtilizationRates(handle).gpu),
+        "gpu_mem_used_bytes": float(pynvml.nvmlDeviceGetMemoryInfo(handle).used),
+        "gpu_temp_c": float(pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)),
+    }
+
+
+def sample_gpu() -> dict[str, float | None]:
+    """GPU utilisation, memory and temperature, or NULLs where unavailable.
+
+    On an Optimus laptop the discrete GPU powers down when idle. That
+    invalidates the whole NVML context, not merely the device handle: the
+    first sample succeeds and every later one fails with NVMLError_Unknown.
+    Re-acquiring the handle is not enough, so a failure re-initialises NVML
+    and retries once. Without this the GPU channels record a single value at
+    startup and NULL forever afterwards.
+    """
+    if not _NVML_READY:
+        return dict(_NO_GPU)
+    try:
+        return _read_gpu()
+    except Exception:  # noqa: BLE001 - stale context after the GPU slept
+        try:
+            pynvml.nvmlShutdown()
+        except Exception:  # noqa: BLE001 - already down; the re-init is what matters
+            pass
+        try:
+            pynvml.nvmlInit()
+            return _read_gpu()
+        except Exception as exc:  # noqa: BLE001 - GPU genuinely asleep this tick
+            global _GPU_ERROR_LOGGED
+            if not _GPU_ERROR_LOGGED:
+                # Logged once: a dGPU that sleeps often would fill the log.
+                _LOGGER.warning("GPU sampling failed after NVML re-init: %r", exc)
+                _GPU_ERROR_LOGGED = True
+            return dict(_NO_GPU)
 
 
 class _LASTINPUTINFO(ctypes.Structure):
@@ -112,6 +181,7 @@ def build_sample_row(raw: dict, elapsed_ms: int | None, deltas: dict[str, float 
         "foreground_app": gauges["foreground_app"], "cpu_busy_s_delta": deltas.get("cpu_busy_s"),
         "mem_used_bytes": gauges["mem_used_bytes"], "disk_read_bytes_delta": deltas.get("disk_read_bytes"),
         "disk_write_bytes_delta": deltas.get("disk_write_bytes"),
+        **sample_gpu(),
     }
 
 

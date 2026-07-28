@@ -16,3 +16,6 @@ pyinstaller>=6.10.0
 # Real telemetry collection (replaces synthetic data generation)
 psutil>=5.9.0
 pywin32>=306; sys_platform == "win32"
+# GPU utilisation, memory and temperature. Optional at runtime: a machine with
+# no NVIDIA GPU records NULL for those channels rather than failing.
+nvidia-ml-py>=12.0.0

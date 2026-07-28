@@ -149,3 +149,38 @@ def test_hardware_errors_count_as_faults_without_listed_ids():
     cleaned = clean_baseline(samples, events)
     # The hardware error's lead-up is excluded; the update event's is not.
     assert len(cleaned) < len(samples) - 1
+
+
+def test_gpu_channels_are_collected_but_not_modelled_yet():
+    """A newly added channel must not invalidate history collected before it.
+
+    clean_baseline drops rows with NULLs in modelled columns, so putting a new
+    channel straight into the model would discard every sample recorded before
+    it existed and reset the baseline clock to zero.
+    """
+    from telemetry.analysis import MODELLED_COLUMNS
+    from telemetry.sampler import SAMPLE_COLUMNS
+
+    for channel in ("gpu_util_pct", "gpu_mem_used_bytes", "gpu_temp_c"):
+        assert channel in SAMPLE_COLUMNS, "GPU channels must be collected"
+        assert channel not in MODELLED_COLUMNS, "GPU channels must not be modelled yet"
+
+
+def test_schema_migration_adds_new_channels_to_an_existing_store(tmp_path):
+    """CREATE TABLE IF NOT EXISTS leaves an older table untouched."""
+    from telemetry import store
+
+    path = tmp_path / "old.db"
+    conn = store.connect(path)
+    conn.execute("CREATE TABLE samples (ts INTEGER PRIMARY KEY, cpu_pct REAL)")
+    conn.execute("CREATE TABLE events (ts INTEGER)")
+    conn.execute("CREATE TABLE proc_samples (ts INTEGER)")
+    conn.execute("CREATE TABLE collection_gaps (channel TEXT)")
+    conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+
+    added = store._add_missing_sample_columns(conn)
+    assert "gpu_temp_c" in added
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(samples)")}
+    assert {"gpu_util_pct", "gpu_mem_used_bytes", "gpu_temp_c"} <= columns
+    assert store._add_missing_sample_columns(conn) == []      # idempotent

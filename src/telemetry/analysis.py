@@ -142,6 +142,49 @@ def load_process_attribution(
     return frame
 
 
+def store_summary(path: Path | str | None = None) -> dict:
+    """Counts, span and disk size of the collected store, for the data view."""
+    db = Path(path or config.db_path())
+    summary: dict = {"path": db, "exists": db.exists(), "size_bytes": 0,
+                     "samples": 0, "events": 0, "proc_samples": 0, "gaps": 0,
+                     "first_ts": None, "last_ts": None, "latest": {}, "available": set()}
+    if not db.exists():
+        return summary
+
+    summary["size_bytes"] = sum(
+        candidate.stat().st_size
+        for candidate in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm"))
+        if candidate.exists()
+    )
+    connection = sqlite3.connect(str(db))
+    try:
+        for table in ("samples", "events", "proc_samples"):
+            summary[table] = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        summary["gaps"] = connection.execute("SELECT COUNT(*) FROM collection_gaps").fetchone()[0]
+        bounds = connection.execute("SELECT MIN(ts), MAX(ts) FROM samples").fetchone()
+        if bounds and bounds[0]:
+            summary["first_ts"] = pd.to_datetime(bounds[0], unit="s", utc=True)
+            summary["last_ts"] = pd.to_datetime(bounds[1], unit="s", utc=True)
+        row = connection.execute("SELECT * FROM samples ORDER BY ts DESC LIMIT 1").fetchone()
+        if row:
+            names = [description[0] for description in connection.execute("SELECT * FROM samples LIMIT 1").description]
+            summary["latest"] = dict(zip(names, row))
+
+            # Availability is a property of the store, not of one row. Rate
+            # channels are NULL on the first tick after a start or a gap, so
+            # judging from the newest row alone would report a working channel
+            # as unsupported by the hardware.
+            counts = connection.execute(
+                "SELECT " + ", ".join(f'COUNT("{name}")' for name in names) + " FROM samples"
+            ).fetchone()
+            summary["available"] = {
+                name for name, count in zip(names, counts) if count
+            }
+    finally:
+        connection.close()
+    return summary
+
+
 def _gap_mask(frame: pd.DataFrame) -> pd.Series:
     if frame.empty:
         return pd.Series(dtype=bool)

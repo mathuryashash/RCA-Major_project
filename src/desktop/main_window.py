@@ -3,6 +3,7 @@
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QLabel, QVBoxLayout, QWidget
 
 from desktop.state import AppState
+from desktop.views.data_view import DataView
 from desktop.views.stage1_view import Stage1View
 from desktop.views.stage2_view import Stage2View
 
@@ -32,6 +33,8 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.stage1 = Stage1View(self.state)
         self.stage2 = Stage2View(self.state)
+        self.data_view = DataView()
+        self.tabs.addTab(self.data_view, "Captured Data")
         self.tabs.addTab(self.stage1, "1 — Baseline && Training")
         self.tabs.addTab(self.stage2, "2 — Run RCA Inference")
         layout.addWidget(self.tabs)

@@ -256,7 +256,14 @@ Only `cpu_freq().max` is used as the denominator — `.min` reads 0.0 on Windows
 and is unusable.
 | Context (stored, excluded from the model) | `on_battery`, `user_idle_sec`, `foreground_app` (executable name only — never window titles, see Privacy) |
 
-Temperature is deliberately absent: `psutil.sensors_temperatures()` returns
+**Correction (2026-07-28):** a temperature source does exist after all.
+NVML reports GPU temperature, utilisation and memory on machines with an
+NVIDIA GPU, and those three channels are now collected (NULL elsewhere).
+They stay out of the model until they have history, because cleaning drops
+rows with NULLs in modelled columns and would otherwise discard every
+sample recorded before the channel existed.
+
+CPU temperature is still absent: `psutil.sensors_temperatures()` returns
 nothing on most Windows laptops. `cpu_freq_ratio` (current ÷ max) is the
 reliable throttle proxy and needs no extra dependency.
 

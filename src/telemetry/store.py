@@ -49,7 +49,28 @@ def connect(path: Path | str) -> sqlite3.Connection:
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
+    _add_missing_sample_columns(conn)
     set_meta(conn, "schema_version", str(config.SCHEMA_VERSION))
+
+
+def _add_missing_sample_columns(conn: sqlite3.Connection) -> list[str]:
+    """Add newly-introduced sample columns to an existing database.
+
+    CREATE TABLE IF NOT EXISTS silently leaves an older table alone, so a new
+    channel would never be written on a machine that has already been
+    collecting. Existing rows keep NULL for the new column, which is why new
+    channels stay out of the model's feature set until they have history --
+    otherwise cleaning would discard every row collected before they existed.
+    """
+    from .sampler import SAMPLE_COLUMN_TYPES
+
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(samples)")}
+    added = []
+    for column, sql_type in SAMPLE_COLUMN_TYPES.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE samples ADD COLUMN {column} {sql_type}")
+            added.append(column)
+    return added
 
 
 def get_meta(conn: sqlite3.Connection, key: str, default: str | None = None) -> str | None:

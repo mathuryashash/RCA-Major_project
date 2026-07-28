@@ -12,7 +12,8 @@ def test_main_window_boots(qtbot):
     window = MainWindow()
     qtbot.addWidget(window)
     assert window.windowTitle() == "AI-Powered Root Cause Analysis"
-    assert window.tabs.count() == 2
+    assert window.tabs.count() == 3          # Captured Data, Stage 1, Stage 2
+    assert window.tabs.tabText(0) == "Captured Data"
     assert window.state.model_trained is False
 
 

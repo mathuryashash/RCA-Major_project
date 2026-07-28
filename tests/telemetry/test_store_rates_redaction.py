@@ -82,3 +82,60 @@ def test_signed_gauge_still_reports_increases():
     tracker.tick({"swap_used_bytes": 100.0}, now=0.0)
     _elapsed, deltas = tracker.tick({"swap_used_bytes": 250.0}, now=30.0)
     assert deltas["swap_used_bytes"] == 150.0
+
+
+def test_gpu_sampling_recovers_after_the_context_goes_stale(monkeypatch):
+    """An Optimus dGPU sleeping invalidates the whole NVML context.
+
+    Without a re-init the first sample succeeds and every later one records
+    NULL forever, which is exactly what happened on real hardware.
+    """
+    from telemetry import sampler
+
+    class _FakeNvml:
+        def __init__(self):
+            self.calls = 0
+            self.inits = 0
+
+        def nvmlInit(self):
+            self.inits += 1
+
+        def nvmlShutdown(self):
+            pass
+
+        def nvmlDeviceGetHandleByIndex(self, index):
+            self.calls += 1
+            # Fail until the context has been re-initialised.
+            if self.inits == 0:
+                raise RuntimeError("NVMLError_Unknown(999)")
+            return object()
+
+        def nvmlDeviceGetUtilizationRates(self, handle):
+            return type("U", (), {"gpu": 7})()
+
+        def nvmlDeviceGetMemoryInfo(self, handle):
+            return type("M", (), {"used": 1234})()
+
+        def nvmlDeviceGetTemperature(self, handle, sensor):
+            return 51
+
+        NVML_TEMPERATURE_GPU = 0
+
+    fake = _FakeNvml()
+    monkeypatch.setattr(sampler, "pynvml", fake)
+    monkeypatch.setattr(sampler, "_NVML_READY", True)
+
+    result = sampler.sample_gpu()
+
+    assert fake.inits == 1, "a stale context must trigger exactly one re-init"
+    assert result["gpu_temp_c"] == 51.0
+    assert result["gpu_util_pct"] == 7.0
+
+
+def test_gpu_sampling_returns_nulls_without_nvml(monkeypatch):
+    from telemetry import sampler
+
+    monkeypatch.setattr(sampler, "_NVML_READY", False)
+    assert sampler.sample_gpu() == {
+        "gpu_util_pct": None, "gpu_mem_used_bytes": None, "gpu_temp_c": None,
+    }
