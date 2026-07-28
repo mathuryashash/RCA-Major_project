@@ -48,10 +48,12 @@ class Stage1View(QWidget):
         status_form = QFormLayout()
         self.clean_days_label = QLabel("—")
         self.uninterrupted_label = QLabel("—")
+        self.current_run_label = QLabel("—")
         self.remaining_label = QLabel("—")
         self.model_label = QLabel("—")
         status_form.addRow("Clean samples collected", self.clean_days_label)
         status_form.addRow("Longest uninterrupted run", self.uninterrupted_label)
+        status_form.addRow("Current unbroken run", self.current_run_label)
         status_form.addRow("Remaining until trainable", self.remaining_label)
         status_form.addRow("Current model", self.model_label)
         status_box.setLayout(status_form)
@@ -90,6 +92,7 @@ class Stage1View(QWidget):
         except Exception as exc:  # noqa: BLE001 - no collector yet is a normal state
             self.clean_days_label.setText("no telemetry collected yet")
             self.uninterrupted_label.setText("—")
+            self.current_run_label.setText("—")
             self.remaining_label.setText("start the collector: python -m telemetry install")
             self.train_button.setEnabled(False)
             self.status_label.setText(str(exc))
@@ -100,6 +103,11 @@ class Stage1View(QWidget):
         )
         self.uninterrupted_label.setText(
             f"{readiness.uninterrupted_samples:,} / {readiness.required_samples:,} samples needed"
+        )
+        # The countdown tracks this run, not the longest: an earlier, longer
+        # segment is closed and can never reach the threshold.
+        self.current_run_label.setText(
+            f"{readiness.current_run_samples:,} / {readiness.required_samples:,} samples"
         )
         if readiness.ready:
             self.remaining_label.setText("ready to train")

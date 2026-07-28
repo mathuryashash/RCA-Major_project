@@ -184,3 +184,27 @@ def test_schema_migration_adds_new_channels_to_an_existing_store(tmp_path):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(samples)")}
     assert {"gpu_util_pct", "gpu_mem_used_bytes", "gpu_temp_c"} <= columns
     assert store._add_missing_sample_columns(conn) == []      # idempotent
+
+
+def test_time_remaining_counts_from_the_current_run_not_the_longest():
+    """A longer earlier segment is closed and can never reach the threshold.
+
+    Counting down from it reports an arrival time that will never happen —
+    which is exactly what several collector restarts produced in practice.
+    """
+    from telemetry.analysis import required_samples
+
+    # 400 clean samples, then a gap, then a shorter current run of 100.
+    first = _samples(400)
+    second = _samples(100, start="2026-01-02")          # far enough to be a gap
+    samples = pd.concat([first, second], ignore_index=True)
+
+    status = baseline_status(samples, pd.DataFrame())
+    needed = required_samples()
+
+    assert status.uninterrupted_samples == 399          # longest, minus first-tick row
+    assert status.current_run_samples == 99             # the run that can still grow
+    # Remaining must be based on the current run, so it is the LARGER figure.
+    expected_hours = (needed - status.current_run_samples) * 30 / 3600
+    assert status.hours_remaining == pytest.approx(expected_hours, abs=0.01)
+    assert status.hours_remaining > (needed - status.uninterrupted_samples) * 30 / 3600

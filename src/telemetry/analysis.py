@@ -70,6 +70,7 @@ class BaselineStatus:
     clean_samples: int
     clean_days: float
     uninterrupted_samples: int
+    current_run_samples: int
     required_samples: int
     ready: bool
     days_remaining: float
@@ -223,21 +224,28 @@ def baseline_status(
     Readiness deliberately keys off the longest gap-free segment rather than the
     total clean count: training rejects fragmented history, so reporting "ready"
     on the total would promise a training run that then fails.
+
+    The time remaining is measured from the CURRENT run, not the longest one.
+    A longer segment further back is closed -- it can never grow -- so counting
+    down from it reports an arrival time that will not happen. After several
+    collector restarts the two diverge sharply.
     """
     clean = clean_baseline(samples, events)
     days = len(clean) * config.SYSTEM_CADENCE_S / 86400
 
     segments = contiguous_windows(clean, minimum_samples=1)
     longest = max((len(segment) for segment in segments), default=0)
+    current = len(segments[-1]) if segments else 0
     needed = required_samples(window_size)
 
     return BaselineStatus(
         clean_samples=len(clean),
         clean_days=days,
         uninterrupted_samples=longest,
+        current_run_samples=current,
         required_samples=needed,
         ready=longest >= needed,
-        days_remaining=max(0, needed - longest) * config.SYSTEM_CADENCE_S / 86400,
+        days_remaining=max(0, needed - current) * config.SYSTEM_CADENCE_S / 86400,
     )
 
 

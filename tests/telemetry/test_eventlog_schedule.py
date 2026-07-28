@@ -22,6 +22,13 @@ def test_schedule_source_command_uses_a_launcher(tmp_path, monkeypatch):
     assert (tmp_path / "telemetry_launcher.py").exists()
 
 
+def test_schedule_frozen_collector_restarts_its_own_executable(monkeypatch):
+    monkeypatch.setattr(schedule.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(schedule.sys, "executable", r"C:\LocalRCA\RCA-Collector\RCA-Collector.exe")
+
+    assert schedule.default_command() == r'"C:\LocalRCA\RCA-Collector\RCA-Collector.exe" run'
+
+
 def test_register_writes_and_unregister_removes_startup_entry(tmp_path, monkeypatch):
     monkeypatch.setattr(schedule.config, "app_dir", lambda: tmp_path)
     monkeypatch.setattr(schedule, "startup_dir", lambda: tmp_path / "Startup")
