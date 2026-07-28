@@ -5,6 +5,10 @@ block_cipher = None
 project_root = os.path.abspath(os.path.join(os.path.dirname(SPEC), ".."))
 src_dir = os.path.join(project_root, "src")
 
+# See excludes.txt for why this list exists and how to regenerate it.
+with open(os.path.join(project_root, "packaging", "excludes.txt")) as f:
+    excludes = [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
+
 a = Analysis(
     [os.path.join(src_dir, "desktop", "main.py")],
     pathex=[src_dir],
@@ -17,16 +21,7 @@ a = Analysis(
     ],
     hookspath=[os.path.join(project_root, "packaging", "hooks")],
     runtime_hooks=[],
-    # The app's real import closure is 172 top-level modules; none of these are in
-    # it. They are installed in this global (non-venv) Python and were observed
-    # being walked by a previous Analysis run, costing ~50 minutes.
-    excludes=[
-        "torchvision", "torchaudio", "torchao", "pytorch_lightning", "geopandas",
-        "causallearn", "matplotlib", "pydot", "streamlit",
-        "googleapiclient", "psycopg2", "psycopg", "lightgbm", "mako", "ormsgpack",
-        "boto3", "botocore", "prometheus_api_client",
-        "IPython", "notebook", "jupyter",
-    ],
+    excludes=excludes,
     cipher=block_cipher,
 )
 
