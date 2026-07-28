@@ -73,6 +73,20 @@ report says "no supported causal chain" and makes no causal claim.**
 
 ## Quick start
 
+### Install the Windows release (recommended)
+
+1. Open the repository's [Releases page](https://github.com/mathuryashash/RCA-Major_project/releases).
+2. Download `LocalRCA-vX.Y.Z-windows-x64.zip`.
+3. Extract the entire ZIP to a folder you can write to, such as `C:\LocalRCA`.
+4. Run `RCA-Desktop.exe` from the extracted `RCA-Desktop` folder.
+
+Do **not** move `RCA-Desktop.exe` out of its folder: the `_internal` directory
+beside it contains PyTorch, Qt, and other required runtime files. Windows may
+show a SmartScreen prompt for an unsigned academic build; verify the release is
+published from this repository before choosing to run it.
+
+### Install from source
+
 ```bash
 git clone https://github.com/mathuryashash/RCA-Major_project.git
 cd RCA-Major_project
