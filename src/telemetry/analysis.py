@@ -16,7 +16,12 @@ MODELLED_COLUMNS = (
     "net_sent_bps", "net_recv_bps", "process_count", "battery_pct",
     "battery_drain_rate", "power_plugged",
 )
-BAD_EVENT_IDS = {41, 1000, 1002, 7, 51, 153, 2004}
+#: Derived from the collector allowlist so the two cannot drift apart.
+BAD_EVENT_IDS = {
+    event_id
+    for ids in config.EVENT_ALLOWLIST.values() if ids
+    for event_id in ids
+}
 
 
 #: Sequence windows needed before the autoencoder has anything to learn from.
@@ -47,7 +52,6 @@ class BaselineStatus:
 
     clean_samples: int
     clean_days: float
-    uninterrupted_days: float
     uninterrupted_samples: int
     required_samples: int
     ready: bool
@@ -170,7 +174,6 @@ def baseline_status(
     return BaselineStatus(
         clean_samples=len(clean),
         clean_days=days,
-        uninterrupted_days=longest * config.SYSTEM_CADENCE_S / 86400,
         uninterrupted_samples=longest,
         required_samples=needed,
         ready=longest >= needed,

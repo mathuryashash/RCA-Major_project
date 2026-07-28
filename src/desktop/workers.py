@@ -92,8 +92,7 @@ class InferenceWorker(QThread):
             self.progress.emit(75, "Building constrained causal graph …")
             payload["causal_results"]["process_attribution"] = payload["process_attribution"]
             report = engine.generate_reports(
-                payload["causal_results"], payload["root_causes"], payload["anomaly_times"],
-                metadata=None, output_dir=str(config.app_dir() / "reports"),
+                payload["causal_results"], payload["root_causes"], payload["anomaly_times"], output_dir=str(config.app_dir() / "reports"),
             )
             payload["report"] = report
             self.progress.emit(100, "RCA complete")

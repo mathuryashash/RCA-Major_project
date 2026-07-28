@@ -32,6 +32,7 @@ from telemetry.analysis import (
     load_process_attribution,
     load_samples,
     merge_incidents,
+    DEFAULT_WINDOW_SIZE,
     modelled_features,
     required_samples,
 )
@@ -53,10 +54,8 @@ def load_real_telemetry(db_path: str | Path) -> Tuple[pd.DataFrame, pd.DataFrame
     return baseline, events, features
 
 
-def baseline_readiness(db_path: str | Path, window_size: int | None = None):
+def baseline_readiness(db_path: str | Path, window_size: int = DEFAULT_WINDOW_SIZE):
     """Return how much clean, uninterrupted telemetry is available for training."""
-    if window_size is None:
-        return baseline_status(load_samples(db_path), load_events(db_path))
     return baseline_status(load_samples(db_path), load_events(db_path), window_size)
 
 
@@ -427,11 +426,9 @@ def detect_anomalies(
 
 def run_causal_inference(
     incident_scaled: pd.DataFrame,
-    feat_cols: List[str],
     anomaly_scores: Dict[str, float],
     anomaly_times: Dict[str, pd.Timestamp],
     active_anomalies: List[str],
-    failure_start_time: Optional[pd.Timestamp] = None,
     events_df: Optional[pd.DataFrame] = None,
     max_lag: int = 5,
     use_dynamic_topology: bool = True,
@@ -525,7 +522,7 @@ def run_real_rca(
                 "process_attribution": [], "evidence": evidence, "model_stale": stale}
 
     results = run_causal_inference(
-        scaled, features, scores, times, active, events_df=events, max_lag=max_lag,
+        scaled, scores, times, active, events_df=events, max_lag=max_lag,
     )
     first_anomaly = min(times.values())
     process_attribution = load_process_attribution(
@@ -617,7 +614,6 @@ def generate_reports(
     results: Dict,
     root_causes: List[Dict],
     anomaly_times: Dict[str, pd.Timestamp],
-    metadata: Optional[Dict],
     failure_type: str = "observed_telemetry",
     output_dir: str = "outputs",
     incident_id: Optional[str] = None,

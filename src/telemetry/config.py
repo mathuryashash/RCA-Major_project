@@ -31,7 +31,6 @@ EVENT_ALLOWLIST: dict[str, set[int] | None] = {
 }
 
 MUTEX_NAME = "Local\\RCATelemetryCollector"
-TASK_NAME = "RCA Telemetry Collector"
 LOG_MAX_BYTES = 1_000_000
 LOG_BACKUPS = 2
 STOP_WAIT_S = 35

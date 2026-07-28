@@ -60,6 +60,7 @@ bleach
 blib2to3
 blinker
 blis
+brotli
 blockbuster
 bs4
 build
@@ -69,6 +70,7 @@ catalogue
 causallearn
 celery
 cfgv
+chardet
 chromadb
 chromadb_rust_bindings
 chunk
@@ -493,6 +495,8 @@ slugify
 smart_open
 smmap
 smolagents
+socks
+sockshandler
 sortedcontainers
 soundcard
 sounddevice
@@ -604,7 +608,6 @@ werkzeug
 wheel
 whichllm
 win10toast
-win32ctypes
 winremote
 wrapt
 wsproto

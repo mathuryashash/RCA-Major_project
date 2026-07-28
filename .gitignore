@@ -33,4 +33,11 @@ Thumbs.db
 # *.pt
 # *.pth
 
-                    
+# Training side-effect written into the working directory, not source
+best_autoencoder_model.pt
+
+# Local scratch and tool state
+tmp/
+.agents/
+.kombai/
+.qodo/

@@ -1,7 +1,6 @@
 """The headless collection loop; it never invokes RCA detection."""
 
 import ctypes
-import sqlite3
 import time
 
 from . import config, sampler, store

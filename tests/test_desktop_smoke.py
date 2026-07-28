@@ -70,7 +70,7 @@ def test_stage1_train_button_gated_on_uninterrupted_baseline(qtbot, monkeypatch)
     from telemetry.analysis import BaselineStatus
 
     monkeypatch.setattr(engine, "baseline_readiness", lambda path: BaselineStatus(
-        clean_samples=100, clean_days=1.0, uninterrupted_days=1.0,
+        clean_samples=100, clean_days=1.0,
         uninterrupted_samples=100, required_samples=2512,
         ready=False, days_remaining=2.0))
 
@@ -87,7 +87,7 @@ def test_stage1_train_button_triggers_worker_once_ready(qtbot, monkeypatch):
     from telemetry.analysis import BaselineStatus
 
     monkeypatch.setattr(engine, "baseline_readiness", lambda path: BaselineStatus(
-        clean_samples=8640, clean_days=3.0, uninterrupted_days=3.0,
+        clean_samples=8640, clean_days=3.0,
         uninterrupted_samples=8640, required_samples=2512,
         ready=True, days_remaining=0.0))
     monkeypatch.setattr(workers_module.TrainWorker, "start", lambda self: None)
