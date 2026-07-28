@@ -4,11 +4,12 @@ import pandas as pd
 import pytest
 
 from telemetry.analysis import (
+    DEFAULT_WINDOW_SIZE,
     Incident,
-    REQUIRED_BASELINE_DAYS,
     baseline_status,
     event_incidents,
     merge_incidents,
+    required_samples,
 )
 
 
@@ -22,8 +23,9 @@ def _samples(count, start="2026-01-01"):
     })
 
 
-# 3 days at 30s cadence, plus one row lost to the NULL-rate first tick.
-THREE_DAYS = int(REQUIRED_BASELINE_DAYS * 86400 / 30) + 1
+# Enough for the window count training needs, plus rows lost to the NULL-rate
+# first tick and to the gap boundary in the split case.
+ENOUGH = required_samples(DEFAULT_WINDOW_SIZE) + 4
 
 
 def test_readiness_requires_uninterrupted_history_not_merely_total():
@@ -32,26 +34,29 @@ def test_readiness_requires_uninterrupted_history_not_merely_total():
     Training rejects a baseline split by collector gaps. Reporting readiness on
     the total sample count would promise a training run that then fails.
     """
-    whole = _samples(THREE_DAYS)
+    whole = _samples(ENOUGH)
     assert baseline_status(whole, pd.DataFrame()).ready is True
 
-    split = _samples(THREE_DAYS)
+    split = _samples(ENOUGH)
     midpoint = len(split) // 2
     split.loc[midpoint:, "timestamp"] += pd.Timedelta(hours=2)
 
     status = baseline_status(split, pd.DataFrame())
-    # Nearly three days in total (the boundary row is dropped as a gap row),
-    # but only half of it in one uninterrupted run.
-    assert status.clean_days > 2.9
-    assert status.uninterrupted_days == pytest.approx(1.5, abs=0.01)
-    assert status.uninterrupted_days < status.clean_days
+    # Enough clean samples in total, but only half of them in one run.
+    assert status.clean_samples >= status.required_samples
+    assert status.uninterrupted_samples < status.required_samples
     assert status.ready is False                            # so it cannot train
     assert status.days_remaining > 0
 
 
 def test_days_remaining_is_zero_once_ready():
-    status = baseline_status(_samples(THREE_DAYS), pd.DataFrame())
+    status = baseline_status(_samples(ENOUGH), pd.DataFrame())
     assert status.days_remaining == 0.0
+
+
+def test_requirement_scales_with_window_size():
+    """The gate is a function of window size, not a fixed number of days."""
+    assert required_samples(60) > required_samples(12)
 
 
 def test_event_incidents_only_for_bad_event_ids():

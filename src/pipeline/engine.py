@@ -33,8 +33,8 @@ from telemetry.analysis import (
     load_samples,
     merge_incidents,
     modelled_features,
+    required_samples,
 )
-from telemetry.config import SYSTEM_CADENCE_S
 
 # A model is stale when the recent median reconstruction error drifts beyond
 # this multiple of its value at training time: the machine's notion of "normal"
@@ -53,9 +53,11 @@ def load_real_telemetry(db_path: str | Path) -> Tuple[pd.DataFrame, pd.DataFrame
     return baseline, events, features
 
 
-def baseline_readiness(db_path: str | Path):
-    """Return the number of clean samples/days available for model training."""
-    return baseline_status(load_samples(db_path), load_events(db_path))
+def baseline_readiness(db_path: str | Path, window_size: int | None = None):
+    """Return how much clean, uninterrupted telemetry is available for training."""
+    if window_size is None:
+        return baseline_status(load_samples(db_path), load_events(db_path))
+    return baseline_status(load_samples(db_path), load_events(db_path), window_size)
 
 
 def median_recon_error(detector: AnomalyDetector, scaled: pd.DataFrame, features: List[str]) -> float:
@@ -352,23 +354,22 @@ def train_from_real_telemetry(
 ) -> Tuple[pd.DataFrame, List[str], AnomalyDetector, MinMaxScaler]:
     """Train an artifact from the collector database; never creates fake data."""
     baseline, _events, features = load_real_telemetry(db_path)
-    readiness = baseline_readiness(db_path)
+    # One rule, shared with the UI gate: readiness and training must agree, or
+    # the app enables a button that then fails.
+    readiness = baseline_readiness(db_path, window_size=window_size)
     if not readiness.ready:
         raise ValueError(
-            f"Need 3 clean days before training; only {readiness.clean_days:.2f} day(s) are available."
+            f"Need {readiness.required_samples:,} uninterrupted clean samples for a "
+            f"window size of {window_size}; the longest clean run is "
+            f"{readiness.uninterrupted_samples:,} "
+            f"({readiness.days_remaining:.2f} more day(s) of collection)."
         )
-    segments = contiguous_windows(baseline, minimum_samples=window_size * 3)
+    # Never create a sequence window across a sleep/collector gap. The longest
+    # clean segment is a conservative baseline until segmented training exists.
+    segments = contiguous_windows(baseline, minimum_samples=required_samples(window_size))
     if not segments:
         raise ValueError("No uninterrupted telemetry segment is long enough for the requested model window.")
-    # Never create a sequence window across a sleep/collector gap.  The
-    # longest clean segment is a conservative baseline until segmented model
-    # training is introduced.
     training_baseline = max(segments, key=len)
-    uninterrupted_days = len(training_baseline) * SYSTEM_CADENCE_S / 86400
-    if uninterrupted_days < 3:
-        raise ValueError(
-            "Need one uninterrupted clean 3-day baseline; collector gaps currently split the available history."
-        )
     values, scaled, scaler = preprocess(training_baseline, training_baseline, features)
     detector = train_model(values, len(features), epochs, window_size, str(model_path), False)
     reference_error = median_recon_error(detector, scaled, features)

@@ -72,7 +72,6 @@ class EventLogReader:
     def newest_record_id(self) -> int | None:
         if win32evtlog is None:
             return None
-        handle = None
         try:
             handle = win32evtlog.EvtQuery(self.channel, win32evtlog.EvtQueryChannelPath | win32evtlog.EvtQueryReverseDirection, "*", None)
             records = win32evtlog.EvtNext(handle, 1)
@@ -81,9 +80,6 @@ class EventLogReader:
         except Exception:
             _LOGGER.exception("Could not determine newest Event Log record for %s", self.channel)
             return None
-        finally:
-            if handle:
-                win32evtlog.EvtClose(handle)
 
     def _mark_invalid(self, conn, newest: int | None) -> None:
         now = int(time.time())
@@ -105,7 +101,6 @@ class EventLogReader:
         if newest is not None and watermark > newest:
             self._mark_invalid(conn, newest)
             return 0
-        handle = None
         try:
             handle = self._query(watermark)
             records: list[dict[str, object]] = []
@@ -127,9 +122,6 @@ class EventLogReader:
         except Exception:
             _LOGGER.exception("Could not read %s Event Log; keeping its watermark", self.channel)
             return 0
-        finally:
-            if handle:
-                win32evtlog.EvtClose(handle)
         if not records:
             # The query may have contained only uninteresting events. Advance
             # the watermark to the newest known record so they are not parsed

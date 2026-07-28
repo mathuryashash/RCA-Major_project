@@ -1,3 +1,7 @@
+import sys
+
+import pytest
+
 from telemetry import schedule, store
 from telemetry.eventlog import _allowed, parse_event_xml, watermark_key
 
@@ -43,3 +47,30 @@ def test_startup_wrapper_quotes_paths_containing_spaces(tmp_path, monkeypatch):
     body = (tmp_path / "Startup" / "rca-collector.cmd").read_text()
     assert '"' in body
     assert f'"{spaced / "telemetry_launcher.py"}"' in body
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Event Log only")
+def test_event_log_reader_talks_to_the_real_api(tmp_path):
+    """Exercise the live pywin32 calls, not just the XML parser.
+
+    A call to a pywin32 function that does not exist in the installed build
+    raises AttributeError, which the reader's broad handler swallowed -- so
+    ingestion returned 0 forever while every parser test still passed.
+    """
+    pytest.importorskip("win32evtlog")
+    from telemetry import store
+    from telemetry.eventlog import EventLogReader, watermark_key
+
+    reader = EventLogReader("System")
+    newest = reader.newest_record_id()
+    assert isinstance(newest, int) and newest > 0, "live EvtQuery/EvtNext/EvtRender must work"
+
+    conn = store.connect(tmp_path / "t.db")
+    store.init_schema(conn)
+    reader.read_new(conn, limit=50)
+
+    # Either rows landed or the watermark advanced past uninteresting records;
+    # both prove the query path ran rather than failing silently.
+    rows = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    mark = store.get_meta(conn, watermark_key("System"), "0")
+    assert rows > 0 or int(mark) > 0

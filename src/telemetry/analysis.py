@@ -19,23 +19,43 @@ MODELLED_COLUMNS = (
 BAD_EVENT_IDS = {41, 1000, 1002, 7, 51, 153, 2004}
 
 
-REQUIRED_BASELINE_DAYS = 3.0
+#: Sequence windows needed before the autoencoder has anything to learn from.
+MIN_TRAINING_WINDOWS = 500
+TRAINING_STRIDE = 5
+DEFAULT_WINDOW_SIZE = 12
+
+
+def required_samples(window_size: int = DEFAULT_WINDOW_SIZE) -> int:
+    """Uninterrupted samples needed to form MIN_TRAINING_WINDOWS windows.
+
+    The requirement is a function of ``window_size``, not a fixed number of
+    days. A flat "3 days" rule assumed a 60-sample window; at the window size
+    the app actually defaults to, it demands roughly three times the data
+    training needs and blocks a model that would train perfectly well.
+    """
+    return window_size + MIN_TRAINING_WINDOWS * TRAINING_STRIDE
 
 
 @dataclass(frozen=True)
 class BaselineStatus:
     """Whether enough clean telemetry exists to train.
 
-    ``uninterrupted_days`` is the figure that actually gates training: model
-    windows may not bridge a collector gap, so three days scattered across four
-    fragments cannot train a model even though ``clean_days`` reads 3.0.
+    ``uninterrupted_samples`` is the figure that gates training: model windows
+    may not bridge a collector gap, so history scattered across fragments
+    cannot train even when the total looks sufficient.
     """
 
     clean_samples: int
     clean_days: float
     uninterrupted_days: float
+    uninterrupted_samples: int
+    required_samples: int
     ready: bool
     days_remaining: float
+
+    @property
+    def hours_remaining(self) -> float:
+        return self.days_remaining * 24.0
 
 
 @dataclass(frozen=True)
@@ -131,7 +151,9 @@ def modelled_features(samples: pd.DataFrame) -> list[str]:
     return [column for column in MODELLED_COLUMNS if column in samples and samples[column].notna().any()]
 
 
-def baseline_status(samples: pd.DataFrame, events: pd.DataFrame) -> BaselineStatus:
+def baseline_status(
+    samples: pd.DataFrame, events: pd.DataFrame, window_size: int = DEFAULT_WINDOW_SIZE
+) -> BaselineStatus:
     """Report training readiness against the uninterrupted-segment requirement.
 
     Readiness deliberately keys off the longest gap-free segment rather than the
@@ -143,14 +165,16 @@ def baseline_status(samples: pd.DataFrame, events: pd.DataFrame) -> BaselineStat
 
     segments = contiguous_windows(clean, minimum_samples=1)
     longest = max((len(segment) for segment in segments), default=0)
-    uninterrupted_days = longest * config.SYSTEM_CADENCE_S / 86400
+    needed = required_samples(window_size)
 
     return BaselineStatus(
         clean_samples=len(clean),
         clean_days=days,
-        uninterrupted_days=uninterrupted_days,
-        ready=uninterrupted_days >= REQUIRED_BASELINE_DAYS,
-        days_remaining=max(0.0, REQUIRED_BASELINE_DAYS - uninterrupted_days),
+        uninterrupted_days=longest * config.SYSTEM_CADENCE_S / 86400,
+        uninterrupted_samples=longest,
+        required_samples=needed,
+        ready=longest >= needed,
+        days_remaining=max(0, needed - longest) * config.SYSTEM_CADENCE_S / 86400,
     )
 
 

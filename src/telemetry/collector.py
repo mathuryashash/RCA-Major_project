@@ -40,7 +40,9 @@ def request_stop() -> None:
 class Collector:
     def __init__(self, conn, capture_messages: bool = False) -> None:
         self.conn, self.capture_messages = conn, capture_messages
-        self._tracker, self._processes = CounterTracker(), ProcessSampler()
+        # swap in use is a gauge, not a counter: it falls as pages are freed.
+        self._tracker = CounterTracker(signed={"swap_used_bytes"})
+        self._processes = ProcessSampler()
         self._readers = [EventLogReader(channel) for channel in config.EVENT_CHANNELS]
         self._last_system_mono = self._last_process_mono = self._last_event_mono = self._last_purge_mono = None
 

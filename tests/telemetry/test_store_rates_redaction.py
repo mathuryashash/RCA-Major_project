@@ -54,3 +54,31 @@ def test_sample_schema_and_gap_detection(tmp_path):
 def test_redaction_removes_known_sensitive_forms():
     value = redact(r"C:\Users\alice\secret.txt \\server\share\x https://example.com/a a@b.test", "alice")
     assert "alice" not in value and "server" not in value and "example.com" not in value and "a@b.test" not in value
+
+
+def test_gauge_decrease_is_signed_not_discarded():
+    """Swap in use falls as pages are freed.
+
+    Treating it as a monotonic counter returns None on every decrease, and
+    downstream cleaning drops those rows -- which silently destroyed most of
+    the collected history.
+    """
+    from telemetry.rates import CounterTracker
+
+    tracker = CounterTracker(signed={"swap_used_bytes"})
+    tracker.tick({"swap_used_bytes": 1000.0, "disk_read_bytes": 100.0}, now=0.0)
+    _elapsed, deltas = tracker.tick(
+        {"swap_used_bytes": 600.0, "disk_read_bytes": 50.0}, now=30.0
+    )
+
+    assert deltas["swap_used_bytes"] == -400.0      # signed gauge: kept
+    assert deltas["disk_read_bytes"] is None        # counter reset: unknowable
+
+
+def test_signed_gauge_still_reports_increases():
+    from telemetry.rates import CounterTracker
+
+    tracker = CounterTracker(signed={"swap_used_bytes"})
+    tracker.tick({"swap_used_bytes": 100.0}, now=0.0)
+    _elapsed, deltas = tracker.tick({"swap_used_bytes": 250.0}, now=30.0)
+    assert deltas["swap_used_bytes"] == 150.0

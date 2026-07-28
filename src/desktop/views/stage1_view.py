@@ -92,12 +92,17 @@ class Stage1View(QWidget):
             return
 
         self.clean_days_label.setText(
-            f"{readiness.clean_days:.2f} days ({readiness.clean_samples:,} samples)"
+            f"{readiness.clean_samples:,} samples ({readiness.clean_days:.2f} days)"
         )
-        self.uninterrupted_label.setText(f"{readiness.uninterrupted_days:.2f} days")
-        self.remaining_label.setText(
-            "ready to train" if readiness.ready else f"{readiness.days_remaining:.2f} days remaining"
+        self.uninterrupted_label.setText(
+            f"{readiness.uninterrupted_samples:,} / {readiness.required_samples:,} samples needed"
         )
+        if readiness.ready:
+            self.remaining_label.setText("ready to train")
+        elif readiness.hours_remaining < 24:
+            self.remaining_label.setText(f"{readiness.hours_remaining:.1f} hours remaining")
+        else:
+            self.remaining_label.setText(f"{readiness.days_remaining:.2f} days remaining")
 
         status = engine.model_status(model_path())
         if not status.exists:
