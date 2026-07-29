@@ -69,7 +69,9 @@ class DataView(QWidget):
             ("samples", "System samples (every 30s)"),
             ("proc_samples", "Process samples (every 5min)"),
             ("events", "Windows Event Log entries"),
-            ("gaps", "Recorded coverage gaps"),
+            ("coverage", "Coverage of that span"),
+            ("sampling_gaps", "Breaks in collection"),
+            ("gaps", "Event Log coverage gaps"),
             ("span", "Collecting since"),
             ("size", "Size on disk"),
             ("path", "Database"),
@@ -109,7 +111,8 @@ class DataView(QWidget):
 
         if not summary["exists"]:
             self.labels["path"].setText(f"{config.db_path()} — not created yet")
-            for key in ("samples", "proc_samples", "events", "gaps", "span", "size"):
+            for key in ("samples", "proc_samples", "events", "coverage",
+                        "sampling_gaps", "gaps", "span", "size"):
                 self.labels[key].setText("—")
             self.table.setRowCount(0)
             return
@@ -118,6 +121,16 @@ class DataView(QWidget):
         self.labels["proc_samples"].setText(f"{summary['proc_samples']:,}")
         self.labels["events"].setText(f"{summary['events']:,}")
         self.labels["gaps"].setText(f"{summary['gaps']:,}")
+        # Span alone implies continuous collection. It is not: sleep,
+        # reboots and collector crashes all leave holes, and training needs
+        # unbroken runs rather than total elapsed time.
+        self.labels["coverage"].setText(
+            f"{summary['samples']:,} of {summary['expected_samples']:,} expected "
+            f"({summary['coverage_pct']:.0f}%)"
+        )
+        self.labels["sampling_gaps"].setText(
+            f"{summary['sampling_gaps']:,} breaks, {summary['gap_hours']:.1f} h not collected"
+        )
         self.labels["size"].setText(_human_bytes(summary["size_bytes"]))
         self.labels["path"].setText(str(summary["path"]))
         if summary["first_ts"] is not None:

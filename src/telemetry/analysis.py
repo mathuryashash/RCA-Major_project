@@ -148,7 +148,9 @@ def store_summary(path: Path | str | None = None) -> dict:
     db = Path(path or config.db_path())
     summary: dict = {"path": db, "exists": db.exists(), "size_bytes": 0,
                      "samples": 0, "events": 0, "proc_samples": 0, "gaps": 0,
-                     "first_ts": None, "last_ts": None, "latest": {}, "available": set()}
+                     "first_ts": None, "last_ts": None, "latest": {}, "available": set(),
+                     "sampling_gaps": 0, "gap_hours": 0.0,
+                     "expected_samples": 0, "coverage_pct": 0.0}
     if not db.exists():
         return summary
 
@@ -166,6 +168,23 @@ def store_summary(path: Path | str | None = None) -> dict:
         if bounds and bounds[0]:
             summary["first_ts"] = pd.to_datetime(bounds[0], unit="s", utc=True)
             summary["last_ts"] = pd.to_datetime(bounds[1], unit="s", utc=True)
+
+            # Sampling gaps are derived from timestamps, never stored. The
+            # collection_gaps table only records Event Log watermark resets, so
+            # reporting it as "coverage gaps" claimed unbroken collection while
+            # the sample series was actually in pieces.
+            span_s = bounds[1] - bounds[0]
+            expected = int(span_s / config.SYSTEM_CADENCE_S) + 1 if span_s else summary["samples"]
+            summary["expected_samples"] = expected
+            summary["coverage_pct"] = (100.0 * summary["samples"] / expected) if expected else 0.0
+
+            times = pd.Series([
+                row[0] for row in connection.execute("SELECT ts FROM samples ORDER BY ts")
+            ])
+            deltas = times.diff()
+            missed = deltas > config.gap_threshold_s()
+            summary["sampling_gaps"] = int(missed.sum())
+            summary["gap_hours"] = float(deltas[missed].sum() / 3600.0)
         row = connection.execute("SELECT * FROM samples ORDER BY ts DESC LIMIT 1").fetchone()
         if row:
             names = [description[0] for description in connection.execute("SELECT * FROM samples LIMIT 1").description]
