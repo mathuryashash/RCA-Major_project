@@ -19,6 +19,9 @@ import sys
 from pathlib import Path
 
 from . import config
+from .logsetup import get_logger
+
+_LOGGER = get_logger(__name__)
 
 _CMD_NAME = "rca-collector.cmd"
 
@@ -41,9 +44,40 @@ def _source_launcher() -> Path:
     return launcher
 
 
-def default_command() -> str:
+#: PyInstaller ships the collector as its own executable beside the GUI.
+COLLECTOR_EXE = "RCA-Collector.exe"
+
+
+def collector_executable() -> Path | None:
+    """Locate the packaged collector, or None when running from source.
+
+    Never fall back to sys.executable. In a frozen build that is the desktop
+    application, so "start the collector" launched a second GUI, which started
+    a third on its own launch, and so on -- a fork bomb that opened windows
+    until the machine was cleared.
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    running = Path(sys.executable)
+    # The collector restarting itself is the one case where sys.executable is
+    # the right answer, and it needs no existence check.
+    if running.name.lower() == COLLECTOR_EXE.lower():
+        return running
+    here = running.parent
+    for candidate in (
+        here / COLLECTOR_EXE,                           # same folder
+        here.parent / "RCA-Collector" / COLLECTOR_EXE,  # sibling dist folder
+    ):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def default_command() -> str | None:
+    """Command that starts the collector, or None if it cannot be located."""
     if getattr(sys, "frozen", False):
-        return build_command(sys.executable, None)
+        collector = collector_executable()
+        return build_command(str(collector), None) if collector else None
     return build_command(sys.executable, str(_source_launcher()))
 
 
@@ -60,6 +94,9 @@ def _shortcut_path() -> Path:
 def register(command: str | None = None) -> bool:
     """Write a startup wrapper that launches the collector at logon."""
     command = command or default_command()
+    if not command:
+        _LOGGER.warning("Collector executable not found; nothing registered.")
+        return False
     path = _shortcut_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,6 +126,10 @@ def is_registered() -> bool:
 def start_now(command: str | None = None) -> bool:
     """Launch the collector immediately, detached from this console."""
     command = command or default_command()
+    if not command:
+        # Better to collect nothing than to launch the wrong executable.
+        _LOGGER.warning("Collector executable not found; not starting one.")
+        return False
     try:
         subprocess.Popen(
             command,

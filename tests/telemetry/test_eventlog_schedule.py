@@ -81,3 +81,40 @@ def test_event_log_reader_talks_to_the_real_api(tmp_path):
     rows = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     mark = store.get_meta(conn, watermark_key("System"), "0")
     assert rows > 0 or int(mark) > 0
+
+
+def test_frozen_build_never_launches_itself(monkeypatch, tmp_path):
+    """A frozen desktop app must not be used as the collector command.
+
+    default_command() fell back to sys.executable when frozen. In the packaged
+    GUI that is RCA-Desktop.exe, so "start the collector" opened a second
+    window, which opened a third on its own startup -- a fork bomb.
+    """
+    fake_gui = tmp_path / "RCA-Desktop" / "RCA-Desktop.exe"
+    fake_gui.parent.mkdir(parents=True)
+    fake_gui.write_text("x")
+
+    monkeypatch.setattr(schedule.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(schedule.sys, "executable", str(fake_gui))
+
+    # No collector beside it: refuse rather than launch the GUI again.
+    assert schedule.collector_executable() is None
+    assert schedule.default_command() is None
+    assert schedule.start_now() is False
+    assert schedule.register() is False
+
+
+def test_frozen_build_finds_the_sibling_collector(monkeypatch, tmp_path):
+    fake_gui = tmp_path / "RCA-Desktop" / "RCA-Desktop.exe"
+    fake_gui.parent.mkdir(parents=True)
+    fake_gui.write_text("x")
+    collector = tmp_path / "RCA-Collector" / "RCA-Collector.exe"
+    collector.parent.mkdir(parents=True)
+    collector.write_text("x")
+
+    monkeypatch.setattr(schedule.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(schedule.sys, "executable", str(fake_gui))
+
+    assert schedule.collector_executable() == collector
+    assert "RCA-Collector.exe" in schedule.default_command()
+    assert "RCA-Desktop.exe" not in schedule.default_command()
