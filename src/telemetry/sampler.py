@@ -216,7 +216,12 @@ class ProcessSampler:
                              "cpu_pct": cpu_delta * 100 / (elapsed_s * self._cores) if elapsed_s else 0.0,
                              "cpu_time_delta_s": cpu_delta, "rss": memory.rss,
                              "io_read_delta": read_delta, "io_write_delta": write_delta})
-            except (psutil.Error, OSError, KeyError):
+            except Exception:  # noqa: BLE001 - see below
+                # Deliberately broad. psutil's Windows backend raises
+                # MemoryError out of cext.proc_info for processes it cannot
+                # query -- it is not a psutil.Error, so a narrow guard let it
+                # escape and kill the collector. One unreadable process must
+                # cost that process, never the tick and never the loop.
                 continue
         self._previous = current
         chosen = {(row["pid"], row["create_time"]): row for row in (

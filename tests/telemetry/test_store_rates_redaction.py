@@ -139,3 +139,41 @@ def test_gpu_sampling_returns_nulls_without_nvml(monkeypatch):
     assert sampler.sample_gpu() == {
         "gpu_util_pct": None, "gpu_mem_used_bytes": None, "gpu_temp_c": None,
     }
+
+
+def test_process_sampling_survives_a_non_psutil_exception(monkeypatch):
+    """psutil's Windows backend raises MemoryError, not psutil.Error.
+
+    A narrow (psutil.Error, OSError, KeyError) guard let it escape and kill
+    the collector; it then stayed dead until the next logon, and the baseline
+    silently stopped growing.
+    """
+    from telemetry import sampler
+
+    class _Exploding:
+        pid = 4242
+        info = {"name": "bad.exe", "create_time": 1.0}
+
+        def __getattr__(self, name):
+            raise MemoryError("proc_info failed")
+
+    class _Fine:
+        pid = 7
+        info = {
+            "name": "ok.exe",
+            "create_time": 2.0,
+            "cpu_times": type("T", (), {"user": 1.0, "system": 0.5})(),
+            "memory_info": type("M", (), {"rss": 100})(),
+            "io_counters": None,
+        }
+
+    def fake_iter(attrs):
+        return [_Exploding(), _Fine()]
+
+    monkeypatch.setattr(sampler.psutil, "process_iter", fake_iter)
+
+    s = sampler.ProcessSampler()
+    s.sample(top_n=5, elapsed_s=None)          # establish a baseline
+    rows = s.sample(top_n=5, elapsed_s=30.0)   # must not raise
+
+    assert [row["name"] for row in rows] == ["ok.exe"]
