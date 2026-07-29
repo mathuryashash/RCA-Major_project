@@ -8,7 +8,14 @@ from PySide6.QtCore import Qt
 from desktop.main_window import MainWindow
 
 
-def test_main_window_boots(qtbot):
+def test_main_window_boots(qtbot, monkeypatch):
+    # Pin the model state: whether one exists on the developer's machine must
+    # not decide whether this test passes.
+    from pipeline import engine
+
+    monkeypatch.setattr(engine, "model_status", lambda path: engine.ModelStatus(
+        exists=False, reason="No model has been trained yet."))
+
     window = MainWindow()
     qtbot.addWidget(window)
     assert window.windowTitle() == "AI-Powered Root Cause Analysis"
@@ -70,7 +77,7 @@ def test_stage1_train_button_gated_on_uninterrupted_baseline(qtbot, monkeypatch)
     from pipeline import engine
     from telemetry.analysis import BaselineStatus
 
-    monkeypatch.setattr(engine, "baseline_readiness", lambda path: BaselineStatus(
+    monkeypatch.setattr(engine, "baseline_readiness", lambda path, window_size=12: BaselineStatus(
         clean_samples=100, clean_days=1.0,
         uninterrupted_samples=100, current_run_samples=100, required_samples=2512,
         ready=False, days_remaining=2.0))
@@ -87,7 +94,7 @@ def test_stage1_train_button_triggers_worker_once_ready(qtbot, monkeypatch):
     from pipeline import engine
     from telemetry.analysis import BaselineStatus
 
-    monkeypatch.setattr(engine, "baseline_readiness", lambda path: BaselineStatus(
+    monkeypatch.setattr(engine, "baseline_readiness", lambda path, window_size=12: BaselineStatus(
         clean_samples=8640, clean_days=3.0,
         uninterrupted_samples=8640, current_run_samples=8640, required_samples=2512,
         ready=True, days_remaining=0.0))
@@ -100,3 +107,21 @@ def test_stage1_train_button_triggers_worker_once_ready(qtbot, monkeypatch):
 
     qtbot.mouseClick(window.stage1.train_button, Qt.LeftButton)
     assert window.stage1.worker is not None
+
+
+def test_stage2_unlocks_from_a_model_trained_in_an_earlier_session(qtbot, monkeypatch):
+    """Reopening the app must not discard a model that already exists.
+
+    Stage 2 used to unlock only via the model_trained signal, so a model
+    trained yesterday left the tab locked until the user retrained today.
+    """
+    from pipeline import engine
+
+    monkeypatch.setattr(engine, "model_status", lambda path: engine.ModelStatus(
+        exists=True, age_days=0.5))
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    assert window.state.model_trained is True
+    assert window.stage2.run_button.isEnabled() is True

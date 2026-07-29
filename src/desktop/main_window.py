@@ -1,6 +1,8 @@
 """Main window — tab shell wiring Stage 1 and Stage 2 views together."""
 
-from PySide6.QtWidgets import QMainWindow, QTabWidget, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QMainWindow, QTabWidget, QLabel, QHBoxLayout, QVBoxLayout, QWidget,
+)
 
 from desktop.state import AppState
 from desktop.views.data_view import DataView
@@ -20,15 +22,19 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(16, 12, 16, 12)
 
-        title = QLabel("🔍 AI-Powered Root Cause Analysis")
+        # One compact row rather than two stacked blocks. The old header spent
+        # ~80px of every tab largely restating the window title, on the most
+        # valuable vertical space on the screen.
+        header = QHBoxLayout()
+        title = QLabel("Local Root Cause Analysis")
         title.setObjectName("heroTitle")
-        subtitle = QLabel(
-            "Diagnose slowdowns, stalls and crashes on this machine using "
-            "LSTM Autoencoders, Granger Causality, and Multi-factor Root Cause Scoring"
-        )
+        subtitle = QLabel("— slowdowns, stalls and crashes on this machine")
         subtitle.setObjectName("heroSubtitle")
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
+        header.addWidget(title)
+        header.addSpacing(10)
+        header.addWidget(subtitle)
+        header.addStretch(1)
+        layout.addLayout(header)
 
         self.tabs = QTabWidget()
         self.stage1 = Stage1View(self.state)
@@ -43,6 +49,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready")
 
         self.stage1.model_trained.connect(self._on_model_trained)
+
+        # A model trained in an earlier session is still a usable model. Without
+        # this, reopening the app left Stage 2 locked until the user retrained,
+        # discarding a perfectly good artifact for no reason.
+        from desktop.workers import model_path
+        from pipeline import engine
+
+        if engine.model_status(model_path()).exists:
+            self.state.model_trained = True
+            self.stage2.set_enabled(True)
+            self.statusBar().showMessage("Existing model loaded — Stage 2 ready", 5000)
 
     def _on_model_trained(self):
         self.state.model_trained = True

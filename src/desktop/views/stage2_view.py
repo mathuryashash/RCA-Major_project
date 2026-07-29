@@ -54,6 +54,7 @@ class Stage2View(QWidget):
         layout.addWidget(config)
 
         self.model_warning = QLabel("")
+        self.model_warning.setObjectName("warningBanner")
         self.model_warning.setWordWrap(True)
         self.model_warning.setVisible(False)
         layout.addWidget(self.model_warning)

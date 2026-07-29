@@ -63,6 +63,9 @@ class Stage1View(QWidget):
         form = QFormLayout()
         self.epochs_spin = _slider_with_spinbox(1, 30, 5, form, "LSTM Training Epochs")
         self.window_size_spin = _slider_with_spinbox(6, 60, 12, form, "LSTM Window Size (samples)")
+        # Window size changes how many training windows the history yields, so
+        # re-evaluate the gate immediately rather than at the next 30s tick.
+        self.window_size_spin.valueChanged.connect(self.refresh_status)
         params.setLayout(form)
         layout.addWidget(params)
 
@@ -88,7 +91,12 @@ class Stage1View(QWidget):
     def refresh_status(self):
         """Show real collection progress and gate training on it."""
         try:
-            readiness = engine.baseline_readiness(config.db_path())
+            # Readiness must be judged at the window size training will use.
+            # Evaluating the default while training used the slider let the
+            # gate open on a configuration that then failed.
+            readiness = engine.baseline_readiness(
+                config.db_path(), window_size=self.window_size_spin.value()
+            )
         except Exception as exc:  # noqa: BLE001 - no collector yet is a normal state
             self.clean_days_label.setText("no telemetry collected yet")
             self.uninterrupted_label.setText("—")
