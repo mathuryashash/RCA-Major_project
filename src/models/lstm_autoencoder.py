@@ -90,14 +90,22 @@ class AnomalyDetector:
         
     def train(self, normal_array: np.ndarray, epochs: int = 20, lr: float = 1e-3,
               val_split: float = 0.2, batch_size: int = 32,
-              checkpoint_path: str | Path = "best_autoencoder_model.pt"):
-        """Standardized training using early stopping and threshold calibration."""
+              checkpoint_path: str | Path = "best_autoencoder_model.pt",
+              windows: "torch.Tensor | None" = None):
+        """Standardized training using early stopping and threshold calibration.
+
+        ``windows`` lets the caller supply sequences built elsewhere. Clean
+        history arrives in segments split by sleeps and restarts, and windows
+        may not span a gap, so the caller builds them per segment and
+        concatenates rather than handing over one array.
+        """
         checkpoint_path = Path(checkpoint_path)
-        if len(normal_array) < self.window_size * 3:
-            raise ValueError(
-                f"Need at least {self.window_size * 3} clean samples to train this model."
-            )
-        windows = self.create_windows(normal_array, stride=5)
+        if windows is None:
+            if len(normal_array) < self.window_size * 3:
+                raise ValueError(
+                    f"Need at least {self.window_size * 3} clean samples to train this model."
+                )
+            windows = self.create_windows(normal_array, stride=5)
         
         split = int(len(windows) * (1 - val_split))
         train_data = windows[:split]

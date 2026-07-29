@@ -24,6 +24,7 @@ from causal_inference.causal_engine import CausalInferencePipeline
 from reporting.report_generator import ReportGenerator
 from telemetry.analysis import (
     Incident,
+    TRAINING_STRIDE,
     baseline_status,
     clean_baseline,
     contiguous_windows,
@@ -325,12 +326,13 @@ def _cap_torch_threads() -> int:
 
 
 def train_model(
-    normal_scaled: np.ndarray,
+    normal_scaled: np.ndarray | None,
     n_features: int,
     epochs: int,
     window_size: int,
     model_path: str,
     skip_train: bool,
+    windows=None,
 ) -> AnomalyDetector:
     """
     Train (or reload) the LSTM Autoencoder on normal data.
@@ -357,7 +359,8 @@ def train_model(
         detector._calibrate_thresholds(val_data)
     else:
         detector.train(
-            normal_scaled.astype(np.float32),
+            None if normal_scaled is None else normal_scaled.astype(np.float32),
+            windows=windows,
             epochs=epochs,
             lr=1e-3,
             val_split=0.2,
@@ -381,19 +384,42 @@ def train_from_real_telemetry(
     readiness = baseline_readiness(db_path, window_size=window_size)
     if not readiness.ready:
         raise ValueError(
-            f"Need {readiness.required_samples:,} uninterrupted clean samples for a "
-            f"window size of {window_size}; the longest clean run is "
-            f"{readiness.uninterrupted_samples:,} "
-            f"({readiness.days_remaining:.2f} more day(s) of collection)."
+            f"Need {readiness.required_windows:,} training windows; only "
+            f"{readiness.total_windows:,} are available across all clean segments "
+            f"({readiness.days_remaining * 24:.1f} more hour(s) of collection, "
+            f"which may be interrupted)."
         )
-    # Never create a sequence window across a sleep/collector gap. The longest
-    # clean segment is a conservative baseline until segmented training exists.
-    segments = contiguous_windows(baseline, minimum_samples=required_samples(window_size))
+
+    # A window must never span a sleep or collector gap, so windows are built
+    # inside each clean segment and then concatenated. Using only the longest
+    # segment discarded valid windows for sitting elsewhere; on a laptop that
+    # sleeps, a single run long enough may never happen.
+    segments = [
+        segment for segment in contiguous_windows(baseline, minimum_samples=window_size)
+        if len(segment) >= window_size
+    ]
     if not segments:
-        raise ValueError("No uninterrupted telemetry segment is long enough for the requested model window.")
-    training_baseline = max(segments, key=len)
-    values, scaled, scaler = preprocess(training_baseline, training_baseline, features)
-    detector = train_model(values, len(features), epochs, window_size, str(model_path), False)
+        raise ValueError("No clean telemetry segment reaches the model window length.")
+
+    training_baseline = pd.concat(segments, ignore_index=True)
+    _, scaled, scaler = preprocess(training_baseline, training_baseline, features)
+
+    detector = AnomalyDetector(n_features=len(features), window_size=window_size)
+    stacked = []
+    for segment in segments:
+        segment_values = np.clip(
+            scaler.transform(segment[features].ffill().bfill()), 0.0, 1.0
+        ).astype(np.float32)
+        built = detector.create_windows(segment_values, stride=TRAINING_STRIDE)
+        if len(built):
+            stacked.append(built)
+
+    import torch
+
+    windows = torch.cat(stacked) if len(stacked) > 1 else stacked[0]
+    detector = train_model(
+        None, len(features), epochs, window_size, str(model_path), False, windows=windows,
+    )
     reference_error = median_recon_error(detector, scaled, features)
     save_model_artifact(
         detector, scaler, features, model_path,

@@ -42,9 +42,18 @@ def _bad_event_mask(events: pd.DataFrame) -> pd.Series:
 
 
 #: Sequence windows needed before the autoencoder has anything to learn from.
-MIN_TRAINING_WINDOWS = 500
+#: Windows are gathered across every clean segment, not just the longest, so
+#: this is a total rather than a demand for one unbroken run.
+MIN_TRAINING_WINDOWS = 250
 TRAINING_STRIDE = 5
 DEFAULT_WINDOW_SIZE = 12
+
+
+def windows_in(sample_count: int, window_size: int = DEFAULT_WINDOW_SIZE) -> int:
+    """Sequence windows obtainable from one uninterrupted run."""
+    if sample_count < window_size:
+        return 0
+    return (sample_count - window_size) // TRAINING_STRIDE + 1
 
 
 def required_samples(window_size: int = DEFAULT_WINDOW_SIZE) -> int:
@@ -74,6 +83,8 @@ class BaselineStatus:
     required_samples: int
     ready: bool
     days_remaining: float
+    total_windows: int = 0
+    required_windows: int = MIN_TRAINING_WINDOWS
 
     @property
     def hours_remaining(self) -> float:
@@ -133,7 +144,12 @@ def load_process_attribution(
         frame = pd.read_sql_query(
             "SELECT name, COUNT(*) AS samples, AVG(cpu_pct) AS avg_cpu_pct, "
             "MAX(rss) AS max_rss_bytes, SUM(COALESCE(io_read_delta, 0) + COALESCE(io_write_delta, 0)) AS io_bytes "
-            "FROM proc_samples WHERE ts BETWEEN ? AND ? GROUP BY name "
+            "FROM proc_samples WHERE ts BETWEEN ? AND ? "
+            # System Idle Process is Windows' accounting placeholder for unused
+            # CPU, not a consumer. Left in, it tops every CPU ranking and names
+            # idleness as the cause of a slowdown.
+            "AND name NOT IN ('System Idle Process') "
+            "GROUP BY name "
             "ORDER BY avg_cpu_pct DESC, io_bytes DESC LIMIT ?",
             connection,
             params=(int(start.timestamp()), int(end.timestamp()), limit),
@@ -257,14 +273,23 @@ def baseline_status(
     current = len(segments[-1]) if segments else 0
     needed = required_samples(window_size)
 
+    # Readiness counts windows across every clean segment. A window never spans
+    # a gap either way, so demanding they all come from one unbroken run threw
+    # away valid training data purely for sitting in a different segment -- and
+    # on a laptop that sleeps, one run long enough may never occur.
+    total_windows = sum(windows_in(len(segment), window_size) for segment in segments)
+    shortfall_windows = max(0, MIN_TRAINING_WINDOWS - total_windows)
+
     return BaselineStatus(
         clean_samples=len(clean),
         clean_days=days,
         uninterrupted_samples=longest,
         current_run_samples=current,
         required_samples=needed,
-        ready=longest >= needed,
-        days_remaining=max(0, needed - current) * config.SYSTEM_CADENCE_S / 86400,
+        ready=total_windows >= MIN_TRAINING_WINDOWS,
+        days_remaining=shortfall_windows * TRAINING_STRIDE * config.SYSTEM_CADENCE_S / 86400,
+        total_windows=total_windows,
+        required_windows=MIN_TRAINING_WINDOWS,
     )
 
 

@@ -28,11 +28,12 @@ def _samples(count, start="2026-01-01"):
 ENOUGH = required_samples(DEFAULT_WINDOW_SIZE) + 4
 
 
-def test_readiness_requires_uninterrupted_history_not_merely_total():
-    """Fragmented history cannot train, so it must not report ready.
+def test_fragmented_history_still_trains_when_windows_suffice():
+    """Windows are gathered across segments, so gaps no longer block training.
 
-    Training rejects a baseline split by collector gaps. Reporting readiness on
-    the total sample count would promise a training run that then fails.
+    They still never span a gap -- each is built inside one segment. Demanding
+    they all come from a single run discarded valid data, and on a laptop that
+    sleeps such a run may never occur.
     """
     whole = _samples(ENOUGH)
     assert baseline_status(whole, pd.DataFrame()).ready is True
@@ -42,10 +43,15 @@ def test_readiness_requires_uninterrupted_history_not_merely_total():
     split.loc[midpoint:, "timestamp"] += pd.Timedelta(hours=2)
 
     status = baseline_status(split, pd.DataFrame())
-    # Enough clean samples in total, but only half of them in one run.
-    assert status.clean_samples >= status.required_samples
-    assert status.uninterrupted_samples < status.required_samples
-    assert status.ready is False                            # so it cannot train
+    assert status.uninterrupted_samples < status.required_samples   # no single run qualifies
+    assert status.total_windows >= status.required_windows          # but the total does
+    assert status.ready is True
+
+
+def test_too_few_windows_is_still_not_ready():
+    status = baseline_status(_samples(60), pd.DataFrame())
+    assert status.total_windows < status.required_windows
+    assert status.ready is False
     assert status.days_remaining > 0
 
 
@@ -186,25 +192,72 @@ def test_schema_migration_adds_new_channels_to_an_existing_store(tmp_path):
     assert store._add_missing_sample_columns(conn) == []      # idempotent
 
 
-def test_time_remaining_counts_from_the_current_run_not_the_longest():
-    """A longer earlier segment is closed and can never reach the threshold.
+def test_time_remaining_is_measured_in_missing_windows():
+    """The countdown tracks the window shortfall, which any segment can fill.
 
-    Counting down from it reports an arrival time that will never happen —
-    which is exactly what several collector restarts produced in practice.
+    It used to count down from the longest run -- a segment that is closed and
+    can never grow, so the arrival time it promised would never come.
     """
-    from telemetry.analysis import required_samples
+    from telemetry.analysis import TRAINING_STRIDE
 
-    # 400 clean samples, then a gap, then a shorter current run of 100.
     first = _samples(400)
     second = _samples(100, start="2026-01-02")          # far enough to be a gap
     samples = pd.concat([first, second], ignore_index=True)
 
     status = baseline_status(samples, pd.DataFrame())
-    needed = required_samples()
+    shortfall = status.required_windows - status.total_windows
 
-    assert status.uninterrupted_samples == 399          # longest, minus first-tick row
-    assert status.current_run_samples == 99             # the run that can still grow
-    # Remaining must be based on the current run, so it is the LARGER figure.
-    expected_hours = (needed - status.current_run_samples) * 30 / 3600
+    assert shortfall > 0
+    expected_hours = shortfall * TRAINING_STRIDE * 30 / 3600
     assert status.hours_remaining == pytest.approx(expected_hours, abs=0.01)
-    assert status.hours_remaining > (needed - status.uninterrupted_samples) * 30 / 3600
+
+
+def test_windows_are_gathered_across_segments_not_just_the_longest():
+    """A laptop that sleeps may never produce one long enough run.
+
+    Windows never span a gap either way, so requiring them all to come from a
+    single segment discarded valid training data for sitting elsewhere.
+    """
+    from telemetry.analysis import MIN_TRAINING_WINDOWS, windows_in
+
+    # Four separate runs, none individually sufficient, ample in total.
+    per_run = 400
+    frames = []
+    for index in range(4):
+        frame = _samples(per_run, start=f"2026-01-0{index + 1}")
+        frames.append(frame)
+    samples = pd.concat(frames, ignore_index=True)
+
+    status = baseline_status(samples, pd.DataFrame())
+
+    assert status.uninterrupted_samples < status.required_samples   # no single run qualifies
+    assert status.total_windows == pytest.approx(
+        4 * windows_in(per_run - 1), abs=4                          # minus first-tick rows
+    )
+    assert status.total_windows >= MIN_TRAINING_WINDOWS
+    assert status.ready is True, "stitched segments must satisfy readiness"
+
+
+def test_system_idle_process_is_excluded_from_attribution(tmp_path):
+    """Windows' idle placeholder would otherwise top every CPU ranking."""
+    from telemetry import store
+    from telemetry.analysis import load_process_attribution
+
+    path = tmp_path / "t.db"
+    conn = store.connect(path)
+    store.init_schema(conn)
+    rows = [
+        (1000, 0, 0.0, "System Idle Process", 99.0, 0.0, 0, 0, 0),
+        (1000, 42, 1.0, "chrome.exe", 30.0, 0.3, 500, 0, 0),
+    ]
+    conn.executemany(
+        "INSERT INTO proc_samples (ts, pid, create_time, name, cpu_pct,"
+        " cpu_time_delta_s, rss, io_read_delta, io_write_delta)"
+        " VALUES (?,?,?,?,?,?,?,?,?)", rows,
+    )
+    conn.close()
+
+    frame = load_process_attribution(
+        pd.Timestamp(900, unit="s", tz="UTC"), pd.Timestamp(1100, unit="s", tz="UTC"), path,
+    )
+    assert list(frame["name"]) == ["chrome.exe"]
