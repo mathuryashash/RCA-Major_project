@@ -253,3 +253,46 @@ def test_rca_analyses_the_largest_segment_not_the_trailing_one(tmp_path, monkeyp
 
     # The leading 56-row segment, not the 4-row tail.
     assert captured["rows"] > 40
+
+
+def test_run_real_rca_reports_progress_through_every_stage(tmp_path, monkeypatch):
+    """Causal inference dominates the runtime and used to run silently.
+
+    The UI jumped from 10% to 75% across one blocking call, so a slow analysis
+    was indistinguishable from a hung one.
+    """
+    path = _db(tmp_path, rows=60)
+
+    monkeypatch.setattr(
+        engine, "load_model_artifact",
+        lambda p: (_StubDetector([True] * 200), _ScalerPassthrough(), ["cpu_pct"]),
+    )
+    monkeypatch.setattr(engine, "model_status", lambda p: engine.ModelStatus(exists=True))
+    monkeypatch.setattr(
+        engine, "run_causal_inference",
+        lambda *a, **k: {"causal_graph": None, "root_causes": [], "event_correlations": []},
+    )
+    monkeypatch.setattr(
+        engine, "load_process_attribution", lambda *a, **k: pd.DataFrame(),
+    )
+
+    seen = []
+    engine.run_real_rca(path, tmp_path / "m.pt", hours=999, progress=lambda pct, msg: seen.append((pct, msg)))
+
+    percentages = [pct for pct, _ in seen]
+    assert percentages == sorted(percentages)                  # never goes backwards
+    assert percentages[0] >= 10 and percentages[-1] >= 85      # spans model load to ranking
+    assert len(percentages) >= 5                               # the causal stage is not silent
+    assert all(message.strip() for _, message in seen)
+
+
+def test_run_real_rca_still_runs_without_a_progress_callback(tmp_path, monkeypatch):
+    """The CLI entry point passes no callback."""
+    path = _db(tmp_path, rows=60)
+    monkeypatch.setattr(
+        engine, "load_model_artifact",
+        lambda p: (_StubDetector([False] * 200), _ScalerPassthrough(), ["cpu_pct"]),
+    )
+    monkeypatch.setattr(engine, "model_status", lambda p: engine.ModelStatus(exists=True))
+
+    assert engine.run_real_rca(path, tmp_path / "m.pt", hours=999)["active_anomalies"] == []

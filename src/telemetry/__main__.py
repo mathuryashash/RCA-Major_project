@@ -1,6 +1,8 @@
 """Command-line control for the local telemetry collector."""
 
 import argparse
+import logging
+import shutil
 import sys
 import time
 
@@ -15,19 +17,33 @@ def _open():
 
 
 def _delete_data() -> int:
+    """Erase everything the collector has written to this machine.
+
+    Deleting only the database left the rest of the directory behind: the
+    trained model, generated reports naming real processes, and collector.log,
+    which records exception tracebacks carrying the user's profile path. The
+    command promises to erase all local data, so the directory goes as a whole.
+    """
     schedule.unregister()
     request_stop()
+    # This process holds collector.log open through its own logger, and Windows
+    # will not remove an open file. Close that handler only -- logging.shutdown()
+    # would take every other handler in the process down with it.
+    collector_log = logging.getLogger("telemetry")
+    for handler in list(collector_log.handlers):
+        collector_log.removeHandler(handler)
+        handler.close()
+    app_dir = config.app_dir()
     deadline = time.monotonic() + config.STOP_WAIT_S
-    paths = [config.db_path().with_name(config.db_path().name + suffix) for suffix in ("", "-wal", "-shm")]
     while time.monotonic() < deadline:
-        try:
-            for path in paths:
-                path.unlink(missing_ok=True)
-            print("Deleted collected telemetry and trained collection state.")
+        # A running collector holds the database open, so removal is retried
+        # until it exits rather than reported as a failure on the first pass.
+        shutil.rmtree(app_dir, ignore_errors=True)
+        if not app_dir.exists():
+            print("Deleted all local telemetry, reports, models and logs.")
             return 0
-        except PermissionError:
-            time.sleep(0.25)
-    print("Collector did not stop; no data was deleted.", file=sys.stderr)
+        time.sleep(0.25)
+    print("Collector did not stop; some data was not deleted.", file=sys.stderr)
     return 1
 
 

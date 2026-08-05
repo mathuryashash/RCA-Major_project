@@ -118,3 +118,16 @@ def test_frozen_build_finds_the_sibling_collector(monkeypatch, tmp_path):
     assert schedule.collector_executable() == collector
     assert "RCA-Collector.exe" in schedule.default_command()
     assert "RCA-Desktop.exe" not in schedule.default_command()
+
+
+def test_startup_wrapper_survives_a_non_ascii_profile_path(tmp_path, monkeypatch):
+    """A non-ASCII username raised UnicodeEncodeError straight through install.
+
+    `except OSError` does not catch it, so the command died with a traceback
+    instead of reporting that the startup entry could not be written.
+    """
+    monkeypatch.setattr(schedule.config, "app_dir", lambda: tmp_path / "Ярослав" / "RCA")
+    monkeypatch.setattr(schedule, "startup_dir", lambda: tmp_path / "Startup")
+
+    registered = schedule.register()                # must not raise
+    assert registered is schedule.is_registered()   # and must report honestly

@@ -80,16 +80,16 @@ class InferenceWorker(QThread):
 
     def run(self):
         try:
-            self.progress.emit(10, "Loading collected telemetry for the selected window …")
             payload = engine.run_real_rca(
                 config.db_path(), model_path(),
                 hours=self.hours, max_lag=self.max_granger_lag,
                 start=self.start, end=self.end, trigger=self.trigger,
+                progress=self.progress.emit,
             )
             if not payload["active_anomalies"]:
                 self.failed.emit("No anomalies were detected in this observed window.")
                 return
-            self.progress.emit(75, "Building constrained causal graph …")
+            self.progress.emit(95, "Generating the report …")
             payload["causal_results"]["process_attribution"] = payload["process_attribution"]
             report = engine.generate_reports(
                 payload["causal_results"], payload["root_causes"], payload["anomaly_times"], output_dir=str(config.app_dir() / "reports"),
