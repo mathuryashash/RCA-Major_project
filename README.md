@@ -76,14 +76,22 @@ report says "no supported causal chain" and makes no causal claim.**
 ### Install the Windows release (recommended)
 
 1. Open the repository's [Releases page](https://github.com/mathuryashash/RCA-Major_project/releases).
-2. Download `LocalRCA-vX.Y.Z-windows-x64.zip`.
-3. Extract the entire ZIP to a folder you can write to, such as `C:\LocalRCA`.
-4. Run `RCA-Desktop.exe` from the extracted `RCA-Desktop` folder.
+2. Download `LocalRCA-vX.Y.Z-windows-x64.zip` and extract the entire ZIP to a folder you can write to, such as `C:\LocalRCA`.
+3. Open PowerShell in the extracted folder and grant consent, then install the per-user background collector:
 
-Do **not** move `RCA-Desktop.exe` out of its folder: the `_internal` directory
-beside it contains PyTorch, Qt, and other required runtime files. Windows may
-show a SmartScreen prompt for an unsigned academic build; verify the release is
-published from this repository before choosing to run it.
+   ```powershell
+   .\RCA-Collector\RCA-Collector.exe accept-consent
+   .\RCA-Collector\RCA-Collector.exe install
+   .\RCA-Collector\RCA-Collector.exe status
+   ```
+
+4. Run `RCA-Desktop\RCA-Desktop.exe`. The collector runs at every logon, even when the desktop app is closed.
+
+Do **not** move either EXE out of its folder: the adjacent `_internal` directory
+contains required runtime files. Windows may show a SmartScreen prompt for an
+unsigned academic build; verify the release is published from this repository
+before choosing to run it. To stop collection and erase all local data, run
+`.\RCA-Collector\RCA-Collector.exe delete-all-data` from the extracted folder.
 
 ### Install from source
 

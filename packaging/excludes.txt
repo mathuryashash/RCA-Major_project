@@ -620,3 +620,12 @@ youtube_transcript_api
 yt_dlp
 zopfli
 zstandard
+
+# torch._export + torch.export — calls inspect.getsource() at import time
+# which crashes under PyInstaller (no .py source files available).
+torch._export
+torch._export.*
+torch.export
+torch.export.*
+torch._inductor
+torch._inductor.*

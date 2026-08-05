@@ -20,7 +20,7 @@ a = Analysis(
         "statsmodels.tsa.stattools",
     ],
     hookspath=[os.path.join(project_root, "packaging", "hooks")],
-    runtime_hooks=[],
+    runtime_hooks=[os.path.join(project_root, "packaging", "runtime_hook.py")],
     excludes=excludes,
     cipher=block_cipher,
 )

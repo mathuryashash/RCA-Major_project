@@ -36,11 +36,15 @@ Thumbs.db
 # Training side-effect written into the working directory, not source
 best_autoencoder_model.pt
 
+# Packaged release archives — published to the Releases page, not to git
+*.zip
+
 # Local scratch and tool state
 tmp/
 .agents/
 .kombai/
 .qodo/
+.serena/
 
 # Word lock files
 ~$*

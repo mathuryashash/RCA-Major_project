@@ -20,7 +20,14 @@ from PyInstaller.utils.hooks import (
 module_collection_mode = "pyz+py"
 warn_on_missing_hiddenimports = False
 
-datas = collect_data_files(
+# PyTorch lazily loads Dynamo polyfills. Static analysis cannot see those
+# imports, so the frozen application omitted ``polyfills.copy`` and failed at
+# runtime. Copy Dynamo's Python sources next to Torch without declaring it as
+# a hidden import: a hidden import makes PyInstaller walk Dynamo and all of
+# its optional compiler backends.
+datas = collect_data_files("torch._dynamo", include_py_files=True)
+
+datas += collect_data_files(
     "torch",
     excludes=["**/*.h", "**/*.hpp", "**/*.cuh", "**/*.lib", "**/*.cpp", "**/*.pyi", "**/*.cmake"],
 )
