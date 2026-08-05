@@ -113,7 +113,9 @@ def register(command: str | None = None) -> bool:
         body = ("@echo off\r\n" f'start "" /min {command}\r\n').encode("oem")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(body)
-    except (OSError, UnicodeError):
+    except (OSError, UnicodeError, LookupError):
+        # LookupError: the "oem" codec exists only on Windows, and this
+        # registers a Windows startup entry, so failing is the right answer.
         return False
     return path.exists()
 

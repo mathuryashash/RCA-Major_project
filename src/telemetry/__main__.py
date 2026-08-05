@@ -24,7 +24,8 @@ def _delete_data() -> int:
     which records exception tracebacks carrying the user's profile path. The
     command promises to erase all local data, so the directory goes as a whole.
     """
-    schedule.unregister()
+    if not schedule.unregister():
+        print("Could not remove the startup entry; do so by hand.", file=sys.stderr)
     request_stop()
     # This process holds collector.log open through its own logger, and Windows
     # will not remove an open file. Close that handler only -- logging.shutdown()
@@ -33,17 +34,33 @@ def _delete_data() -> int:
     for handler in list(collector_log.handlers):
         collector_log.removeHandler(handler)
         handler.close()
+
     app_dir = config.app_dir()
+    database = config.db_path()
+    started = False
     deadline = time.monotonic() + config.STOP_WAIT_S
     while time.monotonic() < deadline:
-        # A running collector holds the database open, so removal is retried
-        # until it exits rather than reported as a failure on the first pass.
+        try:
+            # Deleting the database is the proof that the collector has let go:
+            # Windows holds the file locked until it closes the connection.
+            # Nothing may be removed before this succeeds. stop.flag lives in
+            # this same directory, and clearing the directory first would
+            # retract the very signal the collector is waiting to read -- it
+            # polls once per cadence, so it would never see it and never exit.
+            database.unlink(missing_ok=True)
+        except PermissionError:
+            time.sleep(0.25)
+            continue
+        started = True
         shutil.rmtree(app_dir, ignore_errors=True)
         if not app_dir.exists():
             print("Deleted all local telemetry, reports, models and logs.")
             return 0
         time.sleep(0.25)
-    print("Collector did not stop; some data was not deleted.", file=sys.stderr)
+    if started:
+        print("Some data could not be deleted; run the command again.", file=sys.stderr)
+    else:
+        print("Collector is still running; nothing was deleted.", file=sys.stderr)
     return 1
 
 

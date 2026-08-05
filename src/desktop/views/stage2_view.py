@@ -216,6 +216,10 @@ class Stage2View(QWidget):
         self._apply_model_gate(True)
 
     def _on_failed(self, message):
+        # RCA reports progress per stage, so a failure mid-analysis left the
+        # bar parked at 40% or 55% -- reading as "still working" beside the
+        # failure text.
+        self.progress_bar.setValue(0)
         self.status_label.setText(f"Failed: {message}")
         self._apply_model_gate(True)
 
