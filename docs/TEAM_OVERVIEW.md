@@ -431,9 +431,11 @@ majorprojectt/
 │   ├── conftest.py
 │   ├── test_desktop_smoke.py
 │   ├── test_engine_lifecycle.py
+│   ├── test_packaging.py       # Invariants that only fail once frozen
 │   ├── test_pipeline_engine.py
 │   ├── telemetry/
 │   │   ├── test_analysis.py
+│   │   ├── test_cli.py
 │   │   ├── test_collector.py
 │   │   ├── test_eventlog_schedule.py
 │   │   ├── test_incidents.py
@@ -491,7 +493,7 @@ python -m desktop.main
 # → dist/RCA-Collector/RCA-Collector.exe   (runs at logon, GUI closed)
 ```
 
-### 5. Run Tests (54 tests)
+### 5. Run Tests (73 tests)
 
 ```bash
 python -m pytest tests/ -q
@@ -583,10 +585,15 @@ Correct. The model is 0.52 MB. A GPU sits idle between tiny kernel launches, and
 python -m telemetry delete-all-data
 ```
 This erases the whole `%LOCALAPPDATA%/RCA` directory — the database, the
-trained model, and every generated report — and removes the startup entry, so
-collection does not resume at the next logon until you run `install` again.
-Retraining afterwards needs a fresh baseline. If the collector does not release
-the database within 35 seconds the command deletes nothing and exits non-zero.
+trained model, every generated report, and the collector log — and removes the
+startup entry, so collection does not resume at the next logon until you run
+`install` again. Retraining afterwards needs a fresh baseline.
+
+Collection is stopped and the startup entry removed *before* the data is
+erased. So if the collector does not release the database within 35 seconds,
+the command exits non-zero with your data intact — but collection is already
+stopped and autostart already gone. Re-run it to finish erasing, or run
+`install` again to resume collecting.
 
 ### Q: Does anything leave the machine?
 No. Exported reports contain process names, so if you share a report file, that's the only thing that leaves.

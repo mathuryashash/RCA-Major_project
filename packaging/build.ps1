@@ -9,8 +9,13 @@ $ErrorActionPreference = "Stop"
 $running = Get-Process -Name RCA-Desktop, RCA-Collector -ErrorAction SilentlyContinue
 if ($running) {
     Write-Host "Stopping running build: $(($running | ForEach-Object { $_.ProcessName }) -join ', ')"
-    $running | Stop-Process -Force
-    Start-Sleep -Seconds 2
+    # SilentlyContinue: a process that exits on its own between the two calls
+    # would otherwise abort the build, since $ErrorActionPreference escalates
+    # Stop-Process's error to terminating.
+    $running | Stop-Process -Force -ErrorAction SilentlyContinue
+    # Wait for teardown rather than guessing: unmapping torch's DLLs can take
+    # longer than a fixed sleep allows, and costs nothing when it is quick.
+    $running | Wait-Process -Timeout 30 -ErrorAction SilentlyContinue
 }
 
 Write-Host "Cleaning previous build..."

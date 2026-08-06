@@ -98,9 +98,13 @@ This erases the whole data directory — not only the collected telemetry, but
 the **trained model and every generated report** — and removes the startup
 entry, so collection does not resume at the next logon until you run `install`
 again. Retraining needs a fresh baseline, which takes about 21 hours of
-collection. If the collector does not release the database within 35 seconds
-the command deletes nothing, reports `Collector is still running`, and exits
-non-zero; run it again.
+collection.
+
+Collection is stopped and the startup entry removed *before* the data is
+erased. So if the collector does not release the database within 35 seconds,
+the command reports `Collector is still running`, exits non-zero, and leaves
+your data intact — but collection is already stopped and autostart already
+gone. Re-run it to finish erasing, or run `install` again to resume.
 
 ### Install from source
 
