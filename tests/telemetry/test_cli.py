@@ -2,6 +2,9 @@
 
 import io
 import logging
+import sys
+
+import pytest
 
 from telemetry import __main__ as cli
 
@@ -34,6 +37,7 @@ def test_delete_all_data_erases_the_whole_application_directory(tmp_path, monkey
     assert not app_dir.exists()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="relies on Windows delete-locking")
 def test_delete_all_data_keeps_the_stop_flag_while_the_collector_holds_the_database(tmp_path, monkeypatch):
     """The stop signal lives in the directory being erased.
 

@@ -25,7 +25,9 @@ def _delete_data() -> int:
     command promises to erase all local data, so the directory goes as a whole.
     """
     if not schedule.unregister():
-        print("Could not remove the startup entry; do so by hand.", file=sys.stderr)
+        # The launcher it points at is about to be deleted, so a surviving
+        # entry means a failing console window at every logon until it goes.
+        print(f"Could not remove the startup entry. Delete it by hand from {schedule.startup_dir()}.", file=sys.stderr)
     request_stop()
     # This process holds collector.log open through its own logger, and Windows
     # will not remove an open file. Close that handler only -- logging.shutdown()
