@@ -19,9 +19,20 @@ if ($running) {
 }
 
 Write-Host "Cleaning previous build..."
-Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
+# Windows does not release a memory-mapped DLL the instant its process exits,
+# so the first delete after stopping the app can still fail even though
+# nothing is really holding the file. Retry briefly before giving up: a single
+# attempt failed the build, and simply removing again a moment later worked.
 foreach ($leftover in 'build', 'dist') {
-    if (Test-Path $leftover) { throw "Could not remove $leftover; something still holds a file open." }
+    for ($attempt = 1; $attempt -le 20 -and (Test-Path $leftover); $attempt++) {
+        Remove-Item -Recurse -Force $leftover -ErrorAction SilentlyContinue
+        if (Test-Path $leftover) { Start-Sleep -Milliseconds 500 }
+    }
+    if (Test-Path $leftover) {
+        # Name the culprit rather than guessing: the retry has already proven
+        # this is not a transient handle.
+        Remove-Item -Recurse -Force $leftover -ErrorAction Stop
+    }
 }
 
 # $ErrorActionPreference does not apply to native executables in PowerShell 5.1,
