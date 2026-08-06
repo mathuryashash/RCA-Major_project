@@ -11,6 +11,13 @@
 #
 # Regenerate after changing dependencies; a stale entry here shows up as an
 # ImportError at app startup, not as a build failure.
+#
+# Do not re-add optree. PyInstaller still bundles optree's .dist-info, so
+# torch's `importlib.metadata.version("optree")` probe reports it present and
+# then imports it -- excluding the module turns a supported fallback into
+# "No module named 'optree'" partway through training. Regeneration will want
+# to add it back, because torch imports it lazily and no static closure sees
+# it.
 Crypto
 InquirerPy
 PyInstaller
@@ -347,7 +354,6 @@ openenv
 openenv_core
 openface
 openpyxl
-optree
 ordlookup
 orjson
 ormsgpack

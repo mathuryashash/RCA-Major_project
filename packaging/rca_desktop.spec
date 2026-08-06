@@ -18,6 +18,10 @@ a = Analysis(
         "sklearn.utils._typedefs",
         "sklearn.neighbors._partition_nodes",
         "statsmodels.tsa.stattools",
+        # torch.utils._pytree imports optree lazily, inside a function, so no
+        # static analysis reaches it -- while its .dist-info ships anyway and
+        # tells torch the package is there. See packaging/excludes.txt.
+        "optree",
     ],
     hookspath=[os.path.join(project_root, "packaging", "hooks")],
     runtime_hooks=[os.path.join(project_root, "packaging", "runtime_hook.py")],
