@@ -90,8 +90,17 @@ report says "no supported causal chain" and makes no causal claim.**
 Do **not** move either EXE out of its folder: the adjacent `_internal` directory
 contains required runtime files. Windows may show a SmartScreen prompt for an
 unsigned academic build; verify the release is published from this repository
-before choosing to run it. To stop collection and erase all local data, run
+before choosing to run it.
+
+To stop collection and erase all local data, run
 `.\RCA-Collector\RCA-Collector.exe delete-all-data` from the extracted folder.
+This erases the whole data directory — not only the collected telemetry, but
+the **trained model and every generated report** — and removes the startup
+entry, so collection does not resume at the next logon until you run `install`
+again. Retraining needs a fresh baseline, which takes about 21 hours of
+collection. If the collector does not release the database within 35 seconds
+the command deletes nothing, reports `Collector is still running`, and exits
+non-zero; run it again.
 
 ### Install from source
 
@@ -131,7 +140,7 @@ a custom time range, and produces a ranked report.
 ### Build a standalone executable
 
 ```powershell
-.\packaging\build.ps1     # → dist\RCA-Desktop\RCA-Desktop.exe
+.\packaging\build.ps1     # → dist\RCA-Desktop\ and dist\RCA-Collector\
 ```
 
 ---
@@ -168,7 +177,10 @@ Everything stays on the machine. The collector opens no sockets.
   Provider, ID, level and time carry everything the analysis needs.
 - With opt-in, messages are redacted for user paths on any drive, UNC paths,
   URLs, email addresses and your username — best-effort, and the dialog says so.
-- `python -m telemetry delete-all-data` removes the database and stops collection.
+- `python -m telemetry delete-all-data` stops collection, removes the startup
+  entry, and erases the entire data directory: the database, the trained model,
+  every generated report, and the collector log — which records exception
+  tracebacks containing your profile path.
 
 Exported reports contain process names, so they are the one thing that leaves
 the machine if you share them.
@@ -220,7 +232,7 @@ src/
 ## Testing
 
 ```bash
-python -m pytest tests/ -q     # 54 tests
+python -m pytest tests/ -q     # 69 tests
 ```
 
 Tests use recorded data and live system calls, never generated telemetry. The

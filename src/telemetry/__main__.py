@@ -17,7 +17,7 @@ def _open():
 
 
 def _delete_data() -> int:
-    """Erase everything the collector has written to this machine.
+    """Erase everything this application has written to this machine.
 
     Deleting only the database left the rest of the directory behind: the
     trained model, generated reports naming real processes, and collector.log,

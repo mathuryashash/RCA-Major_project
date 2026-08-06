@@ -102,8 +102,8 @@ def register(command: str | None = None) -> bool:
         # `start ""` detaches so the console window closes immediately, and
         # cmd.exe reads the batch file in the console (OEM) code page.
         # Encode before opening: write_text() truncates first and encodes
-        # second, so a profile path outside the code page left a half-written
-        # .cmd that Windows would still run at logon.
+        # second, so a profile path outside the code page left an empty .cmd
+        # that Windows would still run at logon.
         # ponytail: such a path cannot be registered at all; `chcp 65001` in
         # the wrapper would lift that ceiling.
         body = ("@echo off\r\n" f'start "" /min {command}\r\n').encode("oem")
