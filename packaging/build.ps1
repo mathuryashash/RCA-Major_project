@@ -3,8 +3,21 @@
 
 $ErrorActionPreference = "Stop"
 
+# A previously built app still running holds its own _internal DLLs open, and
+# Windows refuses to delete those, so the clean step failed with "Access is
+# denied" for anyone who had the app open -- which is the normal case.
+$running = Get-Process -Name RCA-Desktop, RCA-Collector -ErrorAction SilentlyContinue
+if ($running) {
+    Write-Host "Stopping running build: $(($running | ForEach-Object { $_.ProcessName }) -join ', ')"
+    $running | Stop-Process -Force
+    Start-Sleep -Seconds 2
+}
+
 Write-Host "Cleaning previous build..."
 Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
+foreach ($leftover in 'build', 'dist') {
+    if (Test-Path $leftover) { throw "Could not remove $leftover; something still holds a file open." }
+}
 
 # $ErrorActionPreference does not apply to native executables in PowerShell 5.1,
 # so a failed PyInstaller run has to be caught by its exit code.
