@@ -84,9 +84,12 @@ def test_detect_incidents_applies_lookback_to_events_too(tmp_path):
     Events are kept for a year while the detector side is filtered, so an
     unfiltered event path would show year-old crashes in a 7-day view.
     """
-    path = _db(tmp_path, rows=10, start_ts=1_800_000_000)
+    # Enough samples for the recent event's window to be analysable: an event
+    # naming a window with no telemetry is dropped now, so a 10-row fixture
+    # would test the wrong thing.
+    path = _db(tmp_path, rows=200, start_ts=1_800_000_000)
     conn = sqlite3.connect(str(path))
-    recent = 1_800_000_000 - 3600                  # inside a 24h lookback
+    recent = 1_800_000_000 + 100 * 30              # inside both the samples and a 24h lookback
     ancient = 1_800_000_000 - 90 * 86400           # long outside it
     conn.executemany(
         "INSERT INTO events (ts, channel, record_id, provider, event_id, level)"
@@ -296,3 +299,35 @@ def test_run_real_rca_still_runs_without_a_progress_callback(tmp_path, monkeypat
     monkeypatch.setattr(engine, "model_status", lambda p: engine.ModelStatus(exists=True))
 
     assert engine.run_real_rca(path, tmp_path / "m.pt", hours=999)["active_anomalies"] == []
+
+
+def test_detect_incidents_hides_windows_rca_cannot_analyse(tmp_path, monkeypatch):
+    """Every offered incident must survive being selected.
+
+    Windows events are retained for a year while samples exist only while the
+    collector ran, so an event fault can name a window holding no telemetry at
+    all. Those were listed and then failed the instant they were chosen, with
+    "no uninterrupted model-length segment" -- which reads as a broken
+    analysis rather than an unanalysable window.
+    """
+    path = _db(tmp_path, rows=120, start_ts=1_800_000_000)
+    covered = pd.Timestamp(1_800_000_000 + 60 * 30, unit="s", tz="UTC")
+    uncovered = pd.Timestamp(1_800_000_000, unit="s", tz="UTC") - pd.Timedelta(days=30)
+
+    events = pd.DataFrame({
+        "timestamp": [covered, uncovered],
+        "event_id": [41, 41],
+        "provider": ["Microsoft-Windows-Kernel-Power"] * 2,
+        "level": [1, 1],
+    })
+    monkeypatch.setattr(engine, "load_events", lambda p: events)
+    # No model, so the detector path is skipped and the default window applies.
+    monkeypatch.setattr(engine, "model_status", lambda p: engine.ModelStatus(exists=False))
+
+    incidents = engine.detect_incidents(path, tmp_path / "absent.pt", lookback_hours=24 * 365)
+
+    starts = [incident.start for incident in incidents]
+    assert any(start <= covered <= end for start, end in ((i.start, i.end) for i in incidents)), \
+        "the event inside collected telemetry should still be offered"
+    assert all(start > uncovered for start in starts), \
+        "an event from before collection began has no telemetry to analyse"

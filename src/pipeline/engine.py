@@ -187,7 +187,23 @@ def detect_incidents(
                     severity=float(severity.loc[run.index].max()),
                 ))
 
-    return sorted(merge_incidents(incidents), key=lambda incident: incident.start, reverse=True)
+    # Only offer incidents RCA can actually analyse. Two ways one cannot be:
+    # events are kept for a year while samples exist only while the collector
+    # ran, so an event fault can name a window holding no telemetry at all; and
+    # a detector incident is a run of as few as min_consecutive samples, which
+    # is shorter than the model window it would have to be scored through.
+    # Both used to be listed and then failed the moment they were selected,
+    # reading as a broken analysis rather than an unanalysable window.
+    window_size = detector.window_size if status.exists and not samples.empty else DEFAULT_WINDOW_SIZE
+    analysable = [
+        incident for incident in incidents
+        if contiguous_windows(
+            samples.loc[samples["timestamp"].between(incident.start, incident.end)],
+            minimum_samples=window_size,
+        )
+    ]
+
+    return sorted(merge_incidents(analysable), key=lambda incident: incident.start, reverse=True)
 
 
 def window_between(
