@@ -525,16 +525,16 @@ def run_real_rca(
     starts. Causal inference dominates the runtime, so without it a caller has
     no way to tell a long analysis apart from a hung one.
     """
-    report = progress or (lambda pct, message: None)
-    report(10, "Loading the trained model …")
+    stage = progress or (lambda pct, message: None)
+    stage(10, "Loading the trained model …")
     detector, scaler, features = load_model_artifact(model_path)
     status = model_status(model_path)
-    report(25, "Loading collected telemetry for the selected window …")
+    stage(25, "Loading collected telemetry for the selected window …")
     if start is not None and end is not None:
         incident, events = window_between(db_path, start, end)
     else:
         incident, events = recent_real_window(db_path, hours)
-    report(40, "Validating the observed window …")
+    stage(40, "Validating the observed window …")
     contiguous = contiguous_windows(incident, minimum_samples=detector.window_size)
     if not contiguous:
         raise ValueError("The selected incident window contains no uninterrupted model-length segment.")
@@ -551,7 +551,7 @@ def run_real_rca(
     scaled_values = np.clip(scaler.transform(clean), 0.0, 1.0)
     scaled = pd.DataFrame(scaled_values, columns=features)
     scaled.insert(0, "timestamp", incident["timestamp"].reset_index(drop=True))
-    report(55, "Scoring anomaly windows …")
+    stage(55, "Scoring anomaly windows …")
     scores, times, active = detect_anomalies(detector, scaled, features)
 
     # Drift is measured here because the model has just been run over this
@@ -583,11 +583,11 @@ def run_real_rca(
                 "causal_results": None, "root_causes": [],
                 "process_attribution": [], "evidence": evidence, "model_stale": stale}
 
-    report(70, "Building the constrained causal graph …")
+    stage(70, "Building the constrained causal graph …")
     results = run_causal_inference(
         scaled, scores, times, active, events_df=events, max_lag=max_lag,
     )
-    report(85, "Ranking root causes and attributing processes …")
+    stage(85, "Ranking root causes and attributing processes …")
     first_anomaly = min(times.values())
     process_attribution = load_process_attribution(
         first_anomaly - pd.Timedelta(minutes=15), incident["timestamp"].max(), db_path,

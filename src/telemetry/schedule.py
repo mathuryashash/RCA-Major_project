@@ -99,17 +99,13 @@ def register(command: str | None = None) -> bool:
         return False
     path = _shortcut_path()
     try:
-        # `start ""` detaches so the console window closes immediately.
-        # cmd.exe reads a batch file in the console (OEM) code page, and the
-        # command embeds the profile path: "ascii" raised UnicodeEncodeError
-        # for any non-ASCII username, which `except OSError` did not catch, so
-        # `install` died with a traceback instead of reporting failure.
-        #
-        # Encode before opening the file. write_text() truncates first and
-        # encodes second, so a path outside the code page left a half-written
-        # .cmd in the Startup folder that cmd.exe would still run at logon.
-        # ponytail: a profile path outside the OEM code page cannot be
-        # registered at all; `chcp 65001` in the wrapper would lift that.
+        # `start ""` detaches so the console window closes immediately, and
+        # cmd.exe reads the batch file in the console (OEM) code page.
+        # Encode before opening: write_text() truncates first and encodes
+        # second, so a profile path outside the code page left a half-written
+        # .cmd that Windows would still run at logon.
+        # ponytail: such a path cannot be registered at all; `chcp 65001` in
+        # the wrapper would lift that ceiling.
         body = ("@echo off\r\n" f'start "" /min {command}\r\n').encode("oem")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(body)
