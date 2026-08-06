@@ -125,3 +125,40 @@ def test_stage2_unlocks_from_a_model_trained_in_an_earlier_session(qtbot, monkey
 
     assert window.state.model_trained is True
     assert window.stage2.run_button.isEnabled() is True
+
+
+def test_windowed_launch_without_std_handles_gets_valid_ones(tmp_path):
+    """A console=False frozen build starts with fds 1 and 2 invalid.
+
+    Writing to them then raises, and PySide6 turns an unhandled exception in a
+    slot into qFatal -- the packaged app died with 0xC0000409 in Qt6Core about
+    forty seconds in, silently. Redirecting its output made it disappear, so
+    it never reproduced from source or in a console build.
+    """
+    import subprocess
+
+    src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+    result_path = tmp_path / "result.txt"
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "import os, sys\n"
+        f"sys.path.insert(0, {src!r})\n"
+        "for fd in (1, 2):\n"
+        "    os.close(fd)\n"
+        "sys.stdout = None\n"
+        "sys.stderr = None\n"
+        "import desktop.main\n"                 # runs _ensure_std_handles on import
+        "ok = True\n"
+        "for fd in (1, 2):\n"
+        "    try:\n"
+        "        os.fstat(fd)\n"
+        "    except OSError:\n"
+        "        ok = False\n"
+        "ok = ok and sys.stdout is not None and sys.stderr is not None\n"
+        "print('written to a real handle')\n"   # would raise before the fix
+        f"open({str(result_path)!r}, 'w').write('ok' if ok else 'bad')\n",
+        encoding="utf-8",
+    )
+
+    subprocess.run([sys.executable, str(probe)], timeout=300, check=True)
+    assert result_path.read_text() == "ok"
