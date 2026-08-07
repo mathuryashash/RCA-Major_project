@@ -26,11 +26,11 @@ class TrainWorker(QThread):
     def run(self):
         try:
             import time
-            self.progress.emit(10, "Checking clean telemetry baseline …")
             started = time.time()
             baseline, features, detector, scaler = engine.train_from_real_telemetry(
                 config.db_path(), model_path(),
                 epochs=self.epochs, window_size=self.window_size,
+                progress=self.progress.emit,
             )
             self.progress.emit(100, "Model trained from collected telemetry")
             self.finished_ok.emit((baseline, features, detector, scaler, time.time() - started))

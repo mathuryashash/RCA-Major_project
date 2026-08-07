@@ -50,3 +50,25 @@ def test_static_topology_prunes_impossible_edges():
     graph = DynamicGraphGenerator()
     assert graph.is_path_possible("cpu_pct", "disk_busy_pct")
     assert not graph.is_path_possible("disk_busy_pct", "cpu_pct")
+
+
+def test_training_reports_every_epoch(tmp_path):
+    """Training is the longest thing the app does and every epoch looks alike.
+
+    Without a per-epoch callback the progress bar sat at one value for the
+    whole fit, which reads as a hang rather than as work.
+    """
+    import numpy as np
+
+    from models.lstm_autoencoder import AnomalyDetector
+
+    detector = AnomalyDetector(n_features=2, window_size=5)
+    seen = []
+    detector.train(
+        np.random.rand(200, 2).astype(np.float32),
+        epochs=3,
+        checkpoint_path=tmp_path / "model.pt",
+        on_epoch=lambda done, total, train_loss, val_loss: seen.append((done, total)),
+    )
+
+    assert seen == [(1, 3), (2, 3), (3, 3)]

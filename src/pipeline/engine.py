@@ -349,6 +349,7 @@ def train_model(
     model_path: str,
     skip_train: bool,
     windows=None,
+    on_epoch=None,
 ) -> AnomalyDetector:
     """
     Train (or reload) the LSTM Autoencoder on normal data.
@@ -382,6 +383,7 @@ def train_model(
             val_split=0.2,
             batch_size=32,
             checkpoint_path=model_path,
+            on_epoch=on_epoch,
         )
 
     return detector
@@ -392,8 +394,17 @@ def train_from_real_telemetry(
     model_path: str | Path,
     epochs: int = 5,
     window_size: int = 12,
+    progress: Optional[Callable[[int, str], None]] = None,
 ) -> Tuple[pd.DataFrame, List[str], AnomalyDetector, MinMaxScaler]:
-    """Train an artifact from the collector database; never creates fake data."""
+    """Train an artifact from the collector database; never creates fake data.
+
+    ``progress`` is called with a percentage and a description as each stage
+    starts, and once per epoch during the fit. Training is the longest thing
+    the app does and every epoch looks the same from outside, so without it a
+    caller can only show a bar that does not move.
+    """
+    stage = progress or (lambda pct, message: None)
+    stage(5, "Loading collected telemetry …")
     baseline, _events, features = load_real_telemetry(db_path)
     # One rule, shared with the UI gate: readiness and training must agree, or
     # the app enables a button that then fails.
@@ -417,6 +428,7 @@ def train_from_real_telemetry(
     if not segments:
         raise ValueError("No clean telemetry segment reaches the model window length.")
 
+    stage(15, f"Building training windows across {len(segments)} clean segment(s) …")
     training_baseline = pd.concat(segments, ignore_index=True)
     _, scaled, scaler = preprocess(training_baseline, training_baseline, features)
 
@@ -433,10 +445,22 @@ def train_from_real_telemetry(
     import torch
 
     windows = torch.cat(stacked) if len(stacked) > 1 else stacked[0]
+
+    # Epochs occupy the bulk of the runtime, so they get the bulk of the bar.
+    def _epoch(done: int, total: int, train_loss: float, val_loss: float) -> None:
+        stage(
+            25 + int(60 * done / max(total, 1)),
+            f"Training epoch {done}/{total} — loss {train_loss:.4f}, validation {val_loss:.4f}",
+        )
+
+    stage(25, f"Training on {len(windows):,} windows …")
     detector = train_model(
-        None, len(features), epochs, window_size, str(model_path), False, windows=windows,
+        None, len(features), epochs, window_size, str(model_path), False,
+        windows=windows, on_epoch=_epoch,
     )
+    stage(90, "Measuring the model's reference error …")
     reference_error = median_recon_error(detector, scaled, features)
+    stage(95, "Saving the trained model …")
     save_model_artifact(
         detector, scaler, features, model_path,
         reference_recon_error=reference_error,

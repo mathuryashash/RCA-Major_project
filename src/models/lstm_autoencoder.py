@@ -91,7 +91,8 @@ class AnomalyDetector:
     def train(self, normal_array: np.ndarray, epochs: int = 20, lr: float = 1e-3,
               val_split: float = 0.2, batch_size: int = 32,
               checkpoint_path: str | Path = "best_autoencoder_model.pt",
-              windows: "torch.Tensor | None" = None):
+              windows: "torch.Tensor | None" = None,
+              on_epoch=None):
         """Standardized training using early stopping and threshold calibration.
 
         ``windows`` lets the caller supply sequences built elsewhere. Clean
@@ -136,7 +137,14 @@ class AnomalyDetector:
             
             if (epoch + 1) % 5 == 0:
                 print(f"Epoch {epoch+1}/{epochs} | Train Loss: {total_loss/len(train_loader):.4f} | Val Loss: {val_loss:.4f}")
-                
+
+            # Training is the longest thing the desktop app does, and every
+            # epoch looks identical from outside, so a caller with a progress
+            # bar has nothing to show without this.
+            if on_epoch is not None:
+                on_epoch(epoch + 1, epochs, total_loss / len(train_loader), val_loss)
+
+
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 torch.save(self.model.state_dict(), checkpoint_path)
