@@ -130,10 +130,11 @@ def test_stage2_unlocks_from_a_model_trained_in_an_earlier_session(qtbot, monkey
 def test_windowed_launch_without_std_handles_gets_valid_ones(tmp_path):
     """A console=False frozen build starts with fds 1 and 2 invalid.
 
-    Writing to them then raises, and PySide6 turns an unhandled exception in a
-    slot into qFatal -- the packaged app died with 0xC0000409 in Qt6Core about
-    forty seconds in, silently. Redirecting its output made it disappear, so
-    it never reproduced from source or in a console build.
+    The packaged app died with 0xC0000409 in Qt6Core about forty seconds in,
+    silently, and runs with this in place. Redirecting its output also made
+    the crash disappear, so it never reproduced from source or in a console
+    build. The mechanism is not established -- it is not a slot exception
+    reaching qFatal, since PySide6 measurably survives those.
     """
     import subprocess
 
@@ -211,3 +212,28 @@ def test_crash_log_is_not_the_collectors_log_file():
     from telemetry import config
 
     assert config.desktop_log_path() != config.log_path()
+
+
+def test_workers_do_not_shadow_qthread_start():
+    """Assigning to self.start replaces the method that launches the thread.
+
+    InferenceWorker stored the window start as self.start, so worker.start()
+    called a Timestamp instead of QThread.start. The click handler raised
+    TypeError, no worker ever ran, and Stage 2 sat at 0% looking like a hung
+    analysis. Training was unaffected only because its worker takes no such
+    argument -- which is exactly how the outage stayed hidden.
+    """
+    import pandas as pd
+
+    from desktop.workers import DetectIncidentsWorker, InferenceWorker, TrainWorker
+
+    workers = [
+        InferenceWorker(24, 5,
+                        start=pd.Timestamp("2026-08-01", tz="UTC"),
+                        end=pd.Timestamp("2026-08-02", tz="UTC")),
+        TrainWorker(5, 12),
+        DetectIncidentsWorker(),
+    ]
+    for worker in workers:
+        assert callable(worker.start), f"{type(worker).__name__}.start is not callable"
+        assert callable(worker.quit), f"{type(worker).__name__}.quit is not callable"

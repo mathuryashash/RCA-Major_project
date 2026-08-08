@@ -74,8 +74,13 @@ class InferenceWorker(QThread):
         super().__init__(parent)
         self.hours = hours
         self.max_granger_lag = max_granger_lag
-        self.start = start
-        self.end = end
+        # Not self.start/self.end: QThread.start is the method that launches
+        # the thread, and assigning a Timestamp over it made worker.start()
+        # raise "'Timestamp' object is not callable". The exception surfaced
+        # in the click handler, so no worker ever ran and the progress bar sat
+        # at 0% indefinitely, with the analysis appearing to hang.
+        self.window_start = start
+        self.window_end = end
         self.trigger = trigger
 
     def run(self):
@@ -83,7 +88,7 @@ class InferenceWorker(QThread):
             payload = engine.run_real_rca(
                 config.db_path(), model_path(),
                 hours=self.hours, max_lag=self.max_granger_lag,
-                start=self.start, end=self.end, trigger=self.trigger,
+                start=self.window_start, end=self.window_end, trigger=self.trigger,
                 progress=self.progress.emit,
             )
             if not payload["active_anomalies"]:
