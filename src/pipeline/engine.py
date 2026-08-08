@@ -179,31 +179,45 @@ def detect_incidents(
                 # .loc, not .iloc: detect() indexes its result from
                 # window_size-1, so these are labels rather than positions.
                 # They coincide only while `scaled` carries a RangeIndex.
+                # Widen a short run to the model window before offering it.
+                # A flagged run can be as short as min_consecutive samples,
+                # which RCA cannot score -- but the run sits inside a segment
+                # already known to hold at least window_size gap-free samples,
+                # so the context needed to analyse it is there. Reporting only
+                # the flagged rows meant a brief spike, the common case, was
+                # dropped as unanalysable despite its data being present.
+                first, last = run.index[0], run.index[-1]
+                if last - first + 1 < detector.window_size:
+                    first = max(scaled.index[0], last - detector.window_size + 1)
                 incidents.append(Incident(
-                    start=pd.Timestamp(scaled["timestamp"].loc[run.index[0]]),
-                    end=pd.Timestamp(scaled["timestamp"].loc[run.index[-1]]),
+                    start=pd.Timestamp(scaled["timestamp"].loc[first]),
+                    end=pd.Timestamp(scaled["timestamp"].loc[last]),
                     trigger="detector",
                     label="Anomalous telemetry",
                     severity=float(severity.loc[run.index].max()),
                 ))
 
-    # Only offer incidents RCA can actually analyse. Two ways one cannot be:
-    # events are kept for a year while samples exist only while the collector
-    # ran, so an event fault can name a window holding no telemetry at all; and
-    # a detector incident is a run of as few as min_consecutive samples, which
-    # is shorter than the model window it would have to be scored through.
-    # Both used to be listed and then failed the moment they were selected,
-    # reading as a broken analysis rather than an unanalysable window.
+    # Only offer incidents RCA can actually analyse. Windows events are kept
+    # for a year while samples exist only while the collector ran, so an event
+    # fault can name a window holding no telemetry at all. Those used to be
+    # listed and then failed the moment they were selected, reading as a
+    # broken analysis rather than an unanalysable window.
+    #
+    # Merge first: two adjacent windows that are each too short can together
+    # cover enough contiguous samples to analyse, and filtering first threw
+    # both away before they could be combined. Merging also makes this
+    # predicate run over the exact range run_real_rca will be handed.
     window_size = detector.window_size if status.exists and not samples.empty else DEFAULT_WINDOW_SIZE
+    merged = merge_incidents(incidents)
     analysable = [
-        incident for incident in incidents
+        incident for incident in merged
         if contiguous_windows(
             samples.loc[samples["timestamp"].between(incident.start, incident.end)],
             minimum_samples=window_size,
         )
     ]
 
-    return sorted(merge_incidents(analysable), key=lambda incident: incident.start, reverse=True)
+    return sorted(analysable, key=lambda incident: incident.start, reverse=True)
 
 
 def window_between(

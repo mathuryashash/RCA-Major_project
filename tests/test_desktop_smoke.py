@@ -182,9 +182,13 @@ def test_unhandled_exceptions_reach_the_collector_log(tmp_path, monkeypatch):
             records.append(self.format(record))
 
     handler = _Capture()
-    logging.getLogger("telemetry").addHandler(handler)
+    logging.getLogger("desktop").addHandler(handler)
     original = sys.excepthook
     try:
+        # The hook chains to whatever it replaced. Pin that to a no-op first:
+        # pytest-qt installs a hook that fails the test on any exception it
+        # sees, which would flag the one deliberately raised here.
+        sys.excepthook = lambda *args: None
         desktop_main._install_crash_logging()
         try:
             raise RuntimeError("timer blew up")
@@ -192,6 +196,18 @@ def test_unhandled_exceptions_reach_the_collector_log(tmp_path, monkeypatch):
             sys.excepthook(*sys.exc_info())
     finally:
         sys.excepthook = original
-        logging.getLogger("telemetry").removeHandler(handler)
+        logging.getLogger("desktop").removeHandler(handler)
 
     assert any("timer blew up" in text for text in records), records
+
+
+def test_crash_log_is_not_the_collectors_log_file():
+    """Two processes cannot share one RotatingFileHandler on Windows.
+
+    Rollover renames the file, which fails while the collector holds it open,
+    and logging swallows that error -- measured, six records written and three
+    survive, losing lines from both writers.
+    """
+    from telemetry import config
+
+    assert config.desktop_log_path() != config.log_path()

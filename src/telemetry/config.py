@@ -53,6 +53,16 @@ def log_path() -> Path:
     return app_dir() / "collector.log"
 
 
+def desktop_log_path() -> Path:
+    """Separate file for the GUI process.
+
+    Two processes cannot share one RotatingFileHandler on Windows: rollover
+    renames the file, which fails while the other process holds it open, and
+    logging swallows that error -- so records are dropped from both writers.
+    """
+    return app_dir() / "desktop.log"
+
+
 def stop_flag_path() -> Path:
     return app_dir() / "stop.flag"
 

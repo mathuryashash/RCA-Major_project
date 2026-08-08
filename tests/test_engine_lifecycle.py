@@ -331,3 +331,35 @@ def test_detect_incidents_hides_windows_rca_cannot_analyse(tmp_path, monkeypatch
         "the event inside collected telemetry should still be offered"
     assert all(start > uncovered for start in starts), \
         "an event from before collection began has no telemetry to analyse"
+
+
+def test_short_detector_incidents_are_offered_not_dropped(tmp_path, monkeypatch):
+    """A brief spike is the common case and must survive to Stage 2.
+
+    A flagged run can be as short as min_consecutive samples, well under the
+    model window, so filtering on the run's own range dropped it as
+    unanalysable -- silently raising min_consecutive to window_size. The run
+    sits inside a segment already known to hold a full window, so the context
+    needed to score it is present; the incident is widened to reach it.
+    """
+    path = _db(tmp_path, rows=120, start_ts=1_800_000_000)
+
+    # Three flagged samples in the middle: shorter than the 5-sample window.
+    flags = [False] * 40 + [True] * 3 + [False] * 200
+    monkeypatch.setattr(
+        engine, "load_model_artifact",
+        lambda p: (_StubDetector(flags), _ScalerPassthrough(), ["cpu_pct"]),
+    )
+    monkeypatch.setattr(engine, "model_status", lambda p: engine.ModelStatus(exists=True))
+    monkeypatch.setattr(engine, "load_events", lambda p: pd.DataFrame())
+
+    incidents = engine.detect_incidents(path, tmp_path / "m.pt", lookback_hours=24 * 365,
+                                        min_consecutive=3)
+
+    assert incidents, "a three-sample spike must still be offered"
+    detector_window = _StubDetector([]).window_size
+    for incident in incidents:
+        window = engine.window_between(path, incident.start, incident.end)[0]
+        assert len(window) >= detector_window, (
+            "an offered incident must carry enough samples to score"
+        )

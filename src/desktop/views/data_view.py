@@ -115,6 +115,11 @@ class DataView(QWidget):
             # print a traceback nobody could see and leave the numbers frozen
             # at their last good values, which reads as "collection stalled".
             self.labels["path"].setText(f"{config.db_path()} — could not be read: {exc}")
+            # Blank the counters too. Leaving them at their last good values is
+            # the frozen-numbers symptom this exists to remove.
+            for key in ("samples", "proc_samples", "events", "coverage",
+                        "sampling_gaps", "gaps", "span", "size"):
+                self.labels[key].setText("—")
             return
 
         if not summary["exists"]:

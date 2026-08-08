@@ -2,7 +2,6 @@
 
 import os
 import sys
-import threading
 
 _here = os.path.dirname(os.path.abspath(__file__))
 _src = os.path.dirname(_here)
@@ -15,11 +14,16 @@ def _ensure_std_handles() -> None:
 
     A windowed frozen build (``console=False``) starts with no console, so
     file descriptors 1 and 2 are invalid and sys.stdout/sys.stderr are None.
-    Any write then raises, and PySide6 turns an unhandled exception inside a
-    slot into qFatal -- the process dies with 0xC0000409 in Qt6Core, tens of
-    seconds in, with no message anywhere. Launch the same executable with its
-    output redirected and it runs fine, which is why this never showed up in
-    a console build or from source.
+    Without this the packaged application died about forty seconds in with
+    0xC0000409 in Qt6Core and no message anywhere; with it, the same build
+    runs. Launching the unfixed executable with its output redirected also
+    made the crash disappear, which is why it never reproduced from source or
+    in a console build.
+
+    The precise mechanism is not established. It is not an exception inside a
+    slot: measured, PySide6 keeps running after one, with or without valid
+    descriptors. Setting sys.stdout alone does not fix it either -- the
+    failure is at the descriptor level, which is why this uses dup2.
 
     Must run before PySide6 is imported, and before any library that writes a
     warning at import time.
@@ -44,41 +48,65 @@ def _ensure_std_handles() -> None:
         sys.stderr = open(os.devnull, "w")           # noqa: SIM115 - process lifetime
 
 
-_ensure_std_handles()
-
-from PySide6.QtWidgets import QApplication  # noqa: E402 - needs valid handles first
-
-from desktop.theme import apply_theme  # noqa: E402
-from desktop.main_window import MainWindow  # noqa: E402
-
-
 def _install_crash_logging() -> None:
-    """Send unhandled exceptions to the collector log rather than nowhere.
+    """Send unhandled exceptions to a log file rather than nowhere.
 
     PySide6 does not abort on an exception raised inside a slot -- measured,
     the loop keeps running -- it prints a traceback and carries on. In a
     windowed build there is nothing to print to, so a timer that fails every
     thirty seconds does so invisibly, and the only symptom is a view that
-    quietly stops updating. Production needs those on disk.
-    """
-    from telemetry.logsetup import get_logger
+    quietly stops updating.
 
-    # Must sit under "telemetry": that is the logger logsetup attaches the
-    # rotating file handler to, and a sibling name would propagate only to the
-    # root logger -- straight back to the nowhere this exists to escape.
-    logger = get_logger("telemetry.desktop")
+    Writes to its own file. Sharing collector.log with the collector process
+    looked tidier, but rollover renames the file, Windows refuses while the
+    other process holds it open, and logging swallows the error -- measured,
+    six records written and three survive, from both writers.
+
+    Installed before the Qt and view imports below, so a mispackaged build
+    that fails at import time is recorded too. QThread.run() exceptions
+    arrive through sys.excepthook, not threading.excepthook; nothing here
+    uses threading.Thread.
+    """
+    import logging
+    from logging.handlers import RotatingFileHandler
+
+    from telemetry import config
+
+    logger = logging.getLogger("desktop")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False            # never reaches the collector's handler
+    if not logger.handlers:
+        try:
+            config.app_dir().mkdir(parents=True, exist_ok=True)
+            handler = RotatingFileHandler(
+                config.desktop_log_path(), maxBytes=config.LOG_MAX_BYTES,
+                backupCount=config.LOG_BACKUPS, encoding="utf-8",
+            )
+        except OSError:
+            return                      # unwritable profile must not stop the app
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"
+        ))
+        logger.addHandler(handler)
+
+    previous = sys.excepthook
 
     def _excepthook(exc_type, exc, tb):
         logger.error("Unhandled exception", exc_info=(exc_type, exc, tb))
-
-    def _threadhook(args):
-        logger.error(
-            "Unhandled exception in %s", args.thread and args.thread.name,
-            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
-        )
+        # Chain, so a console build or a source run still prints to the
+        # terminal instead of losing the traceback to the log alone.
+        previous(exc_type, exc, tb)
 
     sys.excepthook = _excepthook
-    threading.excepthook = _threadhook
+
+
+_ensure_std_handles()
+_install_crash_logging()
+
+from PySide6.QtWidgets import QApplication  # noqa: E402 - needs valid handles first
+
+from desktop.theme import apply_theme  # noqa: E402
+from desktop.main_window import MainWindow  # noqa: E402
 
 
 def _ensure_collector_running() -> None:
@@ -111,7 +139,6 @@ def _ensure_collector_running() -> None:
 
 
 def main() -> None:
-    _install_crash_logging()
     app = QApplication(sys.argv)
     app.setApplicationName("RCA Desktop")
     apply_theme(app)
