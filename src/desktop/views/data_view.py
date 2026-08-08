@@ -107,7 +107,15 @@ class DataView(QWidget):
         self._timer.start(30_000)
 
     def refresh(self):
-        summary = store_summary()
+        try:
+            summary = store_summary()
+        except Exception as exc:  # noqa: BLE001 - a locked or busy database must not stop the view
+            # This runs on the UI thread every thirty seconds against a
+            # database the collector is writing to. A failure here used to
+            # print a traceback nobody could see and leave the numbers frozen
+            # at their last good values, which reads as "collection stalled".
+            self.labels["path"].setText(f"{config.db_path()} — could not be read: {exc}")
+            return
 
         if not summary["exists"]:
             self.labels["path"].setText(f"{config.db_path()} — not created yet")

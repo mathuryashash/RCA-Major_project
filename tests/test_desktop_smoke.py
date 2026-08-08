@@ -162,3 +162,36 @@ def test_windowed_launch_without_std_handles_gets_valid_ones(tmp_path):
 
     subprocess.run([sys.executable, str(probe)], timeout=300, check=True)
     assert result_path.read_text() == "ok"
+
+
+def test_unhandled_exceptions_reach_the_collector_log(tmp_path, monkeypatch):
+    """A failure in a timer must land on disk, not in the void.
+
+    PySide6 keeps running after an exception in a slot; it prints a traceback
+    and carries on. A windowed build has nowhere to print, so a view that
+    fails every thirty seconds does so invisibly and merely looks frozen.
+    """
+    import logging
+
+    from desktop import main as desktop_main
+
+    records = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append(self.format(record))
+
+    handler = _Capture()
+    logging.getLogger("telemetry").addHandler(handler)
+    original = sys.excepthook
+    try:
+        desktop_main._install_crash_logging()
+        try:
+            raise RuntimeError("timer blew up")
+        except RuntimeError:
+            sys.excepthook(*sys.exc_info())
+    finally:
+        sys.excepthook = original
+        logging.getLogger("telemetry").removeHandler(handler)
+
+    assert any("timer blew up" in text for text in records), records

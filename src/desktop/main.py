@@ -2,6 +2,7 @@
 
 import os
 import sys
+import threading
 
 _here = os.path.dirname(os.path.abspath(__file__))
 _src = os.path.dirname(_here)
@@ -51,6 +52,35 @@ from desktop.theme import apply_theme  # noqa: E402
 from desktop.main_window import MainWindow  # noqa: E402
 
 
+def _install_crash_logging() -> None:
+    """Send unhandled exceptions to the collector log rather than nowhere.
+
+    PySide6 does not abort on an exception raised inside a slot -- measured,
+    the loop keeps running -- it prints a traceback and carries on. In a
+    windowed build there is nothing to print to, so a timer that fails every
+    thirty seconds does so invisibly, and the only symptom is a view that
+    quietly stops updating. Production needs those on disk.
+    """
+    from telemetry.logsetup import get_logger
+
+    # Must sit under "telemetry": that is the logger logsetup attaches the
+    # rotating file handler to, and a sibling name would propagate only to the
+    # root logger -- straight back to the nowhere this exists to escape.
+    logger = get_logger("telemetry.desktop")
+
+    def _excepthook(exc_type, exc, tb):
+        logger.error("Unhandled exception", exc_info=(exc_type, exc, tb))
+
+    def _threadhook(args):
+        logger.error(
+            "Unhandled exception in %s", args.thread and args.thread.name,
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    sys.excepthook = _excepthook
+    threading.excepthook = _threadhook
+
+
 def _ensure_collector_running() -> None:
     """Start the collector if it is not already up.
 
@@ -81,6 +111,7 @@ def _ensure_collector_running() -> None:
 
 
 def main() -> None:
+    _install_crash_logging()
     app = QApplication(sys.argv)
     app.setApplicationName("RCA Desktop")
     apply_theme(app)
