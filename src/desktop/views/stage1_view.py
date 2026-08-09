@@ -63,9 +63,14 @@ class Stage1View(QWidget):
         form = QFormLayout()
         self.epochs_spin = _slider_with_spinbox(1, 30, 5, form, "LSTM Training Epochs")
         self.window_size_spin = _slider_with_spinbox(6, 60, 12, form, "LSTM Window Size (samples)")
+        # Both settings change how long training takes, so the cost of a choice
+        # should be visible before making it rather than discovered afterwards.
+        self.estimate_label = QLabel("—")
+        form.addRow("Estimated training time", self.estimate_label)
         # Window size changes how many training windows the history yields, so
         # re-evaluate the gate immediately rather than at the next 30s tick.
         self.window_size_spin.valueChanged.connect(self.refresh_status)
+        self.epochs_spin.valueChanged.connect(self._refresh_estimate)
         params.setLayout(form)
         layout.addWidget(params)
 
@@ -87,6 +92,24 @@ class Stage1View(QWidget):
         self._status_timer = QTimer(self)
         self._status_timer.timeout.connect(self.refresh_status)
         self._status_timer.start(30_000)
+
+    def _refresh_estimate(self):
+        """Quote the cost of the current settings.
+
+        Calibrated by the last real run on this machine, so the first quote
+        uses built-in constants and later ones use measured ones.
+        """
+        windows = getattr(self, "_total_windows", 0)
+        if not windows:
+            self.estimate_label.setText("—")
+            return
+        seconds = engine.estimate_training_seconds(
+            windows, self.window_size_spin.value(), self.epochs_spin.value(),
+        )
+        self.estimate_label.setText(
+            f"{engine.format_duration(seconds)}  ({windows:,} windows × "
+            f"{self.epochs_spin.value()} epochs)"
+        )
 
     def refresh_status(self):
         """Show real collection progress and gate training on it."""
@@ -123,6 +146,9 @@ class Stage1View(QWidget):
             self.remaining_label.setText(f"{readiness.hours_remaining:.1f} hours remaining")
         else:
             self.remaining_label.setText(f"{readiness.days_remaining:.2f} days remaining")
+
+        self._total_windows = readiness.total_windows
+        self._refresh_estimate()
 
         status = engine.model_status(model_path())
         if not status.exists:

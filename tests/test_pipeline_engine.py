@@ -72,3 +72,33 @@ def test_training_reports_every_epoch(tmp_path):
     )
 
     assert seen == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_training_estimate_scales_with_the_settings_that_drive_it():
+    """The quote must move when the inputs that cost time move."""
+    from pipeline import engine
+
+    base = engine.estimate_training_seconds(1700, 12, 5, cold_start=False)
+    assert engine.estimate_training_seconds(1700, 12, 20, cold_start=False) > base
+    assert engine.estimate_training_seconds(1700, 60, 5, cold_start=False) > base
+    assert engine.estimate_training_seconds(5000, 12, 5, cold_start=False) > base
+    # Torch pulls in Dynamo on first use, which is not free.
+    assert engine.estimate_training_seconds(1700, 12, 5, cold_start=True) > base
+
+
+def test_rca_estimate_grows_faster_than_the_window():
+    """Granger tests every pair, and the pair count grows with the window."""
+    from pipeline import engine
+
+    small = engine.estimate_rca_seconds(100) - engine.estimate_rca_seconds(0)
+    large = engine.estimate_rca_seconds(2000) - engine.estimate_rca_seconds(1900)
+    assert large > small * 5
+
+
+def test_durations_read_naturally():
+    from pipeline import engine
+
+    assert engine.format_duration(1) == "~1 second"
+    assert engine.format_duration(45) == "~45 seconds"
+    assert "minute" in engine.format_duration(600)
+    assert "hour" in engine.format_duration(9000)

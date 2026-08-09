@@ -51,6 +51,15 @@ class Stage2View(QWidget):
         self.lag_spin.setRange(2, 10)
         self.lag_spin.setValue(5)
         form.addRow("Granger Max Lag", self.lag_spin)
+
+        self.estimate_label = QLabel("—")
+        self.estimate_label.setWordWrap(True)
+        form.addRow("Estimated analysis time", self.estimate_label)
+        # Every input that changes the cost, or whether causality can be
+        # tested at all, re-quotes it.
+        self.lag_spin.valueChanged.connect(self._refresh_estimate)
+        self.start_edit.dateTimeChanged.connect(self._refresh_estimate)
+        self.end_edit.dateTimeChanged.connect(self._refresh_estimate)
         config.setLayout(form)
         layout.addWidget(config)
 
@@ -161,6 +170,33 @@ class Stage2View(QWidget):
         if incident is not None:
             self.start_edit.setDateTime(QDateTime.fromSecsSinceEpoch(int(incident.start.timestamp())))
             self.end_edit.setDateTime(QDateTime.fromSecsSinceEpoch(int(incident.end.timestamp())))
+        self._refresh_estimate()
+
+    def _refresh_estimate(self):
+        """Quote the cost of the selected range, and warn when it is too short.
+
+        A window below the Granger floor produces an empty graph for lack of
+        data rather than lack of a relationship, which is worth knowing before
+        running rather than after reading the report.
+        """
+        start = pd.Timestamp(self.start_edit.dateTime().toSecsSinceEpoch(), unit="s", tz="UTC")
+        end = pd.Timestamp(self.end_edit.dateTime().toSecsSinceEpoch(), unit="s", tz="UTC")
+        samples = max(int((end - start).total_seconds() // 30), 0)
+        if samples <= 0:
+            self.estimate_label.setText("—")
+            return
+
+        needed = self.lag_spin.value() * 3 + 2
+        text = (
+            f"{engine.format_duration(engine.estimate_rca_seconds(samples))} "
+            f"(~{samples:,} samples)"
+        )
+        if samples < needed:
+            text += (
+                f" — too short to test causality: needs {needed} samples at lag "
+                f"{self.lag_spin.value()}, so the graph will be empty"
+            )
+        self.estimate_label.setText(text)
 
     def _on_refresh_incidents(self):
         self.refresh_button.setEnabled(False)

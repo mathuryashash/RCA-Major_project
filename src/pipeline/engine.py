@@ -7,7 +7,9 @@ PySide6 desktop app import from this module so there is exactly one
 implementation of each pipeline phase.
 """
 
+import json
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -403,6 +405,113 @@ def train_model(
     return detector
 
 
+# Measured on the development machine, 1,701 windows, while a build ran (so
+# the constants lean slow rather than optimistic). Per-epoch cost is linear in
+# the window length -- an LSTM walks every timestep -- and linear in the number
+# of windows. Fitted from 1/5/10/20 epochs at window 12, and 5 epochs at
+# windows 12/30/60; the held-out points land within 0.05s.
+_TRAIN_FIXED_SECONDS = 2.1              # load, window, scale, score, save
+_TRAIN_COLD_START_SECONDS = 5.0         # torch pulls in Dynamo on first use
+_TRAIN_EPOCH_BASE = 0.40                # per epoch at the reference size
+_TRAIN_EPOCH_PER_WINDOW_SAMPLE = 0.0308
+_TRAIN_REFERENCE_WINDOWS = 1701
+
+_TIMING_FILE = "timing.json"
+
+
+def _timing_path() -> Path:
+    from telemetry import config
+    return config.app_dir() / _TIMING_FILE
+
+
+def _observed_rate(key: str) -> Optional[float]:
+    """A rate measured on this machine, if one has been recorded."""
+    try:
+        with open(_timing_path(), encoding="utf-8") as handle:
+            return float(json.load(handle)[key])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _record_rate(key: str, value: float) -> None:
+    """Remember a measured rate so later estimates fit this machine."""
+    path = _timing_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            data = {}
+        data[key] = value
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+    except OSError:
+        pass                            # an estimate is not worth failing over
+
+
+def _reference_epoch_seconds(n_windows: int, window_size: int) -> float:
+    """Per-epoch cost on the machine these constants were measured on."""
+    return (
+        (_TRAIN_EPOCH_BASE + _TRAIN_EPOCH_PER_WINDOW_SAMPLE * window_size)
+        * (max(n_windows, 1) / _TRAIN_REFERENCE_WINDOWS)
+    )
+
+
+def estimate_training_seconds(
+    n_windows: int, window_size: int, epochs: int, cold_start: bool = True
+) -> float:
+    """Roughly how long training will take, before it is started.
+
+    Training is the longest thing the app does and the settings that drive it
+    are adjustable, so the cost of a choice should be visible before making
+    it. Calibrated against the last real run on this machine when there has
+    been one; the built-in constants are only a starting point, and a slower
+    or faster machine would otherwise be quoted someone else's numbers.
+    """
+    # Calibrate the magnitude, not the shape: cost per epoch is
+    # (base + per_timestep * window_size), not proportional to window_size, so
+    # a raw seconds-per-window-per-timestep rate fitted at one window length
+    # mispredicts every other length.
+    per_epoch = _reference_epoch_seconds(n_windows, window_size)
+    per_epoch *= _observed_rate("train_scale") or 1.0
+
+    total = _TRAIN_FIXED_SECONDS + max(epochs, 1) * per_epoch
+    if cold_start:
+        total += _TRAIN_COLD_START_SECONDS
+    return total
+
+
+# RCA cost is dominated by Granger, which tests every ordered pair of
+# anomalous metrics, and the count of those grows with the window -- so the
+# total grows faster than the sample count. Fitted across 104/464/1334-sample
+# windows: predicts 0.8/2.1/12.6 against 0.8/1.4/12.5 measured.
+_RCA_FIXED_SECONDS = 0.7
+_RCA_PER_SAMPLE_SQUARED = 6.7e-6
+
+
+def estimate_rca_seconds(n_samples: int) -> float:
+    """Roughly how long RCA will take on a window of this size.
+
+    Approximate by nature: the real driver is how many metrics turn out to be
+    anomalous, which is not known until the window has been scored.
+    """
+    observed = _observed_rate("rca_per_sample_squared") or _RCA_PER_SAMPLE_SQUARED
+    return _RCA_FIXED_SECONDS + observed * max(n_samples, 0) ** 2
+
+
+def format_duration(seconds: float) -> str:
+    """A short human reading of an estimate."""
+    if seconds < 90:
+        rounded = max(round(seconds), 1)
+        return f"~{rounded} second" + ("" if rounded == 1 else "s")
+    minutes = seconds / 60
+    if minutes < 90:
+        rounded = round(minutes)
+        return f"~{rounded} minute" + ("" if rounded == 1 else "s")
+    return f"~{minutes / 60:.1f} hours"
+
+
 def train_from_real_telemetry(
     db_path: str | Path,
     model_path: str | Path,
@@ -461,7 +570,10 @@ def train_from_real_telemetry(
     windows = torch.cat(stacked) if len(stacked) > 1 else stacked[0]
 
     # Epochs occupy the bulk of the runtime, so they get the bulk of the bar.
+    epoch_marks: List[float] = []
+
     def _epoch(done: int, total: int, train_loss: float, val_loss: float) -> None:
+        epoch_marks.append(time.monotonic())
         stage(
             25 + int(60 * done / max(total, 1)),
             f"Training epoch {done}/{total} — loss {train_loss:.4f}, validation {val_loss:.4f}",
@@ -472,6 +584,18 @@ def train_from_real_telemetry(
         None, len(features), epochs, window_size, str(model_path), False,
         windows=windows, on_epoch=_epoch,
     )
+    # Calibrate against what this machine actually did, so the next quote is
+    # its own number rather than the development machine's. Measure from the
+    # gaps between epochs and drop the first: torch pulls in Dynamo through
+    # the optimiser on first use, which cost 4.6s of a 5.9s run here and would
+    # otherwise be smeared across every epoch of the estimate.
+    if len(epoch_marks) > 2:
+        steady = [b - a for a, b in zip(epoch_marks[1:], epoch_marks[2:])]
+        measured = sorted(steady)[len(steady) // 2]
+        reference = _reference_epoch_seconds(len(windows), window_size)
+        if reference > 0:
+            _record_rate("train_scale", measured / reference)
+
     stage(90, "Measuring the model's reference error …")
     reference_error = median_recon_error(detector, scaled, features)
     stage(95, "Saving the trained model …")
