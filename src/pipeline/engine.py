@@ -649,14 +649,32 @@ def run_real_rca(
     results["process_attribution"] = process_attribution
 
     graph = results.get("causal_graph")
+    edges = graph.number_of_edges() if graph is not None else 0
+
+    # "Nothing survived the gates" and "nothing was ever tested" produced an
+    # identical empty graph and an identical report, which is the difference
+    # between a negative result and no result at all. Granger skips any pair
+    # with fewer than max_lag * 3 aligned samples, and differencing for
+    # stationarity costs up to two more, so a short window silently tests
+    # nothing: 16 samples at lag 5 yielded no comparisons whatsoever.
+    tested_pairs = len(results.get("granger_results") or {})
+    minimum_for_causality = max_lag * 3 + 2
+    too_short = tested_pairs == 0 and len(incident) < minimum_for_causality
+    if edges:
+        support = "supported"
+    elif too_short:
+        support = "not tested - window too short"
+    else:
+        support = "no supported causal chain"
+
     evidence.update({
         "anomalous_metrics": len(active),
-        "surviving_causal_edges": graph.number_of_edges() if graph is not None else 0,
+        "surviving_causal_edges": edges,
         "attributed_processes": len(process_attribution),
         "correlated_events": len(results.get("event_correlations", []) or []),
-        # No causal chain survived the FDR and effect-size gates: correlation
-        # only, and the report must not imply otherwise.
-        "causal_support": "supported" if graph is not None and graph.number_of_edges() else "no supported causal chain",
+        "causal_pairs_tested": tested_pairs,
+        "samples_needed_for_causality": minimum_for_causality,
+        "causal_support": support,
     })
     results["evidence"] = evidence
 
@@ -693,12 +711,27 @@ def _evidence_markdown(results: Dict) -> str:
     lines.append(f"- Correlated Windows events: {evidence.get('correlated_events', 0)}")
     lines.append(f"- Processes attributable in window: {evidence.get('attributed_processes', 0)}")
 
-    if evidence.get("causal_support") == "no supported causal chain":
+    support = evidence.get("causal_support")
+    if support == "not tested - window too short":
         lines.append("")
         lines.append(
-            "> **No supported causal chain.** No edge survived multiple-testing "
-            "correction and the effect-size floor. The metrics below are "
-            "correlated with the incident; no causal claim is made."
+            f"> **Causality was not tested.** Granger needs "
+            f"{evidence.get('samples_needed_for_causality', 0)} samples at this lag "
+            f"and the window holds {evidence.get('samples_analysed', 0)}, so no pair "
+            "was compared and the graph is empty for lack of data rather than for "
+            "lack of a relationship. **The ranking below therefore carries no causal "
+            "evidence at all**: with no edges, every metric has equal graph influence "
+            "and identical outflow, so the order reflects only which metric deviated "
+            "first and by how much. Widen the range or lower the Granger max lag."
+        )
+    elif support == "no supported causal chain":
+        lines.append("")
+        lines.append(
+            f"> **No supported causal chain.** "
+            f"{evidence.get('causal_pairs_tested', 0)} metric pair(s) were tested and "
+            "no edge survived multiple-testing correction and the effect-size floor. "
+            "The metrics below are correlated with the incident; no causal claim is "
+            "made, and their order reflects timing and severity only."
         )
 
     if evidence.get("model_stale"):

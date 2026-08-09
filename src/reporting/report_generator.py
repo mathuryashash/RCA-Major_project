@@ -24,14 +24,42 @@ class ReportGenerator:
             
         top_cause, top_score, top_explanation = ranked_candidates[0]
         confidence_percent = min(100.0, top_score * 100)
-        
+
+        # Without a surviving edge there is no causal evidence: graph influence
+        # is uniform and outflow is zero for every metric, so the order comes
+        # from timing and severity alone. Announcing a "primary root cause"
+        # then contradicted the evidence section directly below it, and the
+        # top two candidates could sit four ten-thousandths apart.
+        has_causal_evidence = causal_graph is not None and causal_graph.number_of_edges() > 0
+        runner_up = ranked_candidates[1][1] if len(ranked_candidates) > 1 else None
+        too_close = runner_up is not None and abs(top_score - runner_up) < 0.01
+
+        if has_causal_evidence:
+            headline = [
+                f"**Primary Root Cause Identified:** `{top_cause}`",
+                f"**System Confidence:** {confidence_percent:.1f}%",
+            ]
+        else:
+            headline = [
+                f"**Leading Correlated Metric:** `{top_cause}` "
+                f"(ranked {confidence_percent:.1f}% on timing and severity only)",
+                "**No causal evidence.** No causal edge survived, so this is not a "
+                "root cause claim -- it is the metric that deviated earliest and "
+                "hardest.",
+            ]
+            if too_close:
+                headline.append(
+                    f"**Ranking is not meaningful here:** `{ranked_candidates[1][0]}` "
+                    f"scores {ranked_candidates[1][1] * 100:.1f}%, within a hundredth "
+                    "of the leader, so their order is arbitrary."
+                )
+
         report = [
             f"# Root Cause Analysis Report: Incident {incident_id}",
             f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "",
             "## Executive Summary",
-            f"**Primary Root Cause Identified:** `{top_cause}`",
-            f"**System Confidence:** {confidence_percent:.1f}%",
+            *headline,
             f"**Start Time:** {anomaly_times.get(top_cause, 'Unknown')}",
             "",
             "## Causal Chain Summary",

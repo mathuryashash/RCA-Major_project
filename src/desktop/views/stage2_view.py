@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout, QSpinBox,
     QPushButton, QProgressBar, QLabel, QTableWidget, QTableWidgetItem,
     QTabWidget, QFileDialog, QPlainTextEdit, QComboBox, QDateTimeEdit,
+    QHeaderView, QSizePolicy,
 )
 
 from desktop.workers import DetectIncidentsWorker, InferenceWorker, model_path
@@ -71,10 +72,37 @@ class Stage2View(QWidget):
         self.root_cause_table = QTableWidget()
         self.root_cause_table.setColumnCount(6)
         self.root_cause_table.setHorizontalHeaderLabels(["Rank", "Metric", "Score", "Confidence", "Outflow", "Downstream"])
+        # Fill the panel rather than leaving the columns huddled on the left,
+        # and let the last column take the slack.
+        header = self.root_cause_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Stretch)
+        header.setStretchLastSection(True)
+        self.root_cause_table.verticalHeader().setVisible(False)
+        self.root_cause_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.results_tabs.addTab(self.root_cause_table, "Root Causes")
-        self.graph_view = PlotlyWebView()
+
+        self.graph_view = PlotlyWebView(
+            title="Causal Graph",
+            legend=(
+                "Each circle is an anomalous metric; colour runs from red for the "
+                "highest-ranked candidate through orange for the rest. An arrow means "
+                "Granger causality survived FDR correction and the effect-size floor, "
+                "and is labelled with the lag at which it was strongest. "
+                "<b>No arrows means no causal link was established</b> — which can be "
+                "because none exists, or because the window was too short to test one."
+            ),
+        )
         self.results_tabs.addTab(self.graph_view, "Causal Graph")
-        self.timeline_view = PlotlyWebView()
+        self.timeline_view = PlotlyWebView(
+            title="Anomaly Timeline",
+            legend=(
+                "One line per metric, scaled 0–1 so unrelated units can share an axis, "
+                "for the five most anomalous metrics. Each red dashed vertical line "
+                "marks when that metric first crossed its anomaly threshold; their "
+                "left-to-right order is the ordering the root-cause ranking treats as "
+                "temporal priority."
+            ),
+        )
         self.results_tabs.addTab(self.timeline_view, "Anomaly Timeline")
         self.report_text = QPlainTextEdit()
         self.report_text.setReadOnly(True)
@@ -201,7 +229,8 @@ class Stage2View(QWidget):
                       ", ".join(rc.get("downstream_effects", [])) or "—"]
             for col, value in enumerate(values):
                 self.root_cause_table.setItem(row, col, QTableWidgetItem(value))
-        self.root_cause_table.resizeColumnsToContents()
+        # No resizeColumnsToContents(): the header is in Stretch mode so the
+        # columns fill the panel instead of huddling at the left edge.
         graph = payload["causal_results"]["causal_graph"]
         self.graph_view.show_figure(draw_causal_graph(graph, root_causes[0]["metric"] if root_causes else ""))
         self.timeline_view.show_figure(build_timeline_figure(payload["incident_scaled"], payload["anomaly_scores"], payload["anomaly_times"]))

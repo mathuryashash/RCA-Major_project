@@ -237,3 +237,64 @@ def test_workers_do_not_shadow_qthread_start():
     for worker in workers:
         assert callable(worker.start), f"{type(worker).__name__}.start is not callable"
         assert callable(worker.quit), f"{type(worker).__name__}.quit is not callable"
+
+
+def test_figures_can_be_opened_full_screen_with_a_legend(qtbot, monkeypatch):
+    """Both figures are unreadable in a short tab and need explaining.
+
+    The graph and timeline each carry a caption saying what is drawn, and a
+    button that opens the same figure on its own with a close control.
+    """
+    import plotly.graph_objects as go
+    from pipeline import engine
+
+    monkeypatch.setattr(engine, "model_status", lambda path: engine.ModelStatus(
+        exists=True, age_days=1.0))
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    from desktop.views import graph_panel
+
+    opened = []
+    # exec() would block the test on a modal dialog.
+    monkeypatch.setattr(graph_panel._FullScreenFigure, "exec",
+                        lambda self: opened.append(self))
+
+    for panel in (window.stage2.graph_view, window.stage2.timeline_view):
+        assert panel._legend, "every figure needs a legend explaining it"
+        assert panel.expand_button.isEnabled()
+
+        # Nothing plotted yet: expanding must be a no-op, not a crash.
+        before = len(opened)
+        panel.open_full_screen()
+        assert len(opened) == before, "expanding an empty panel must do nothing"
+
+        panel.show_figure(go.Figure())
+        panel.open_full_screen()
+        assert len(opened) == before + 1
+
+    assert len(opened) == 2, "both figures must be openable full screen"
+    for dialog in opened:
+        assert dialog.windowTitle()                      # names what is shown
+        assert dialog.isFullScreen()
+        buttons = [b.text() for b in dialog.findChildren(type(window.stage2.run_button))]
+        assert any("Close" in text for text in buttons), buttons
+        # Close here rather than handing these to qtbot: it holds weak
+        # references and closes at teardown, by which point Python has already
+        # dropped the last reference and the C++ object is gone.
+        dialog.close()
+
+
+def test_root_cause_table_columns_fill_the_panel(qtbot, monkeypatch):
+    """The columns huddled at the left, leaving the panel mostly empty."""
+    from PySide6.QtWidgets import QHeaderView
+    from pipeline import engine
+
+    monkeypatch.setattr(engine, "model_status", lambda path: engine.ModelStatus(
+        exists=True, age_days=1.0))
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    header = window.stage2.root_cause_table.horizontalHeader()
+    assert header.sectionResizeMode(0) == QHeaderView.Stretch
