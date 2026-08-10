@@ -92,8 +92,8 @@ class PlotlyWebView(QWidget):
 class _FullScreenFigure(QDialog):
     """The same figure, given the whole screen."""
 
-    def __init__(self, fig, title: str, legend: str, parent=None):
-        super().__init__(parent)
+    def __init__(self, fig, title: str, legend: str, owner=None):
+        super().__init__(owner)
         self.setWindowTitle(title or "Figure")
         self.setObjectName("fullScreenFigure")
 
@@ -114,10 +114,15 @@ class _FullScreenFigure(QDialog):
             caption.setObjectName("figureLegend")
             layout.addWidget(caption)
 
-        # Its own view and temp directory: reusing the parent's would replace
-        # the figure showing behind this dialog.
-        self._panel = PlotlyWebView()
-        self._panel.show_figure(fig)
-        layout.addWidget(self._panel, stretch=1)
+        # Its own view, so the figure behind this dialog is left alone, but the
+        # owner's temp directory: constructing another PlotlyWebView made a new
+        # mkdtemp and a new atexit handler on every open, leaking a directory
+        # of rendered HTML per expansion for the life of the process.
+        if _WEBENGINE_AVAILABLE:
+            self.view = QWebEngineView()
+            layout.addWidget(self.view, stretch=1)
+            owner._render(fig, self.view)
+        else:
+            layout.addWidget(QLabel("QtWebEngine is not installed."), stretch=1)
 
         self.showFullScreen()

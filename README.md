@@ -184,7 +184,11 @@ Everything stays on the machine. The collector opens no sockets.
 - `python -m telemetry delete-all-data` stops collection, removes the startup
   entry, and erases the entire data directory: the database, the trained model,
   every generated report, and the collector log — which records exception
-  tracebacks containing your profile path.
+  tracebacks containing your profile path. It also clears the rendered charts
+  the desktop app leaves in your temp directory, which hold the metric values
+  behind an incident.
+- Reports you export yourself are not tracked and not deleted: they go where
+  you choose to save them.
 
 Exported reports contain process names, so they are the one thing that leaves
 the machine if you share them.

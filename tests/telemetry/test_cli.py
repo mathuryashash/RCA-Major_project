@@ -82,3 +82,29 @@ def test_delete_all_data_leaves_other_loggers_usable(tmp_path, monkeypatch):
         assert "still here" in stream.getvalue()
     finally:
         unrelated.removeHandler(handler)
+
+
+def test_delete_all_data_clears_rendered_figures(tmp_path, monkeypatch):
+    """Figures are written outside the data directory and were left behind.
+
+    The desktop app renders the graph and timeline into a mkdtemp directory
+    cleaned only at interpreter exit, which never runs if the app is killed.
+    Those files carry the metric values behind an incident, so "erase all
+    local data" has to reach them too.
+    """
+    import tempfile
+
+    fake_temp = tmp_path / "temp"
+    fake_temp.mkdir()
+    leftover = fake_temp / "rca_desktop_abc123"
+    leftover.mkdir()
+    (leftover / "figure_1.html").write_text("cpu_pct spiked at 02:47")
+    unrelated = fake_temp / "something_else"
+    unrelated.mkdir()
+
+    _isolate(monkeypatch, tmp_path / "RCA")
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_temp))
+
+    assert cli._delete_data() == 0
+    assert not leftover.exists()
+    assert unrelated.exists(), "only this application's figures may be removed"

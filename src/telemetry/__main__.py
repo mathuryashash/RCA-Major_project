@@ -4,7 +4,9 @@ import argparse
 import logging
 import shutil
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 from . import config, schedule, store
 from .collector import Collector, acquire_singleton, consent_granted, grant_consent, request_stop
@@ -14,6 +16,20 @@ def _open():
     connection = store.connect(config.db_path())
     store.init_schema(connection)
     return connection
+
+
+def _remove_rendered_figures() -> None:
+    """Clear rendered figures the desktop app left in the temp directory.
+
+    The graph and timeline are drawn by writing HTML to a mkdtemp directory,
+    cleaned at interpreter exit -- which never runs if the app is killed or
+    the machine loses power. Those files hold the metric values behind an
+    incident and live outside the data directory, so "erase all local data"
+    walked straight past them; two such directories, several megabytes each,
+    were still present here.
+    """
+    for leftover in Path(tempfile.gettempdir()).glob("rca_desktop_*"):
+        shutil.rmtree(leftover, ignore_errors=True)
 
 
 def _delete_data() -> int:
@@ -55,6 +71,7 @@ def _delete_data() -> int:
             continue
         started = True
         shutil.rmtree(app_dir, ignore_errors=True)
+        _remove_rendered_figures()
         if not app_dir.exists():
             print("Deleted all local telemetry, reports, models and logs.")
             return 0
