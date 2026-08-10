@@ -89,6 +89,11 @@ def _install_crash_logging() -> None:
         ))
         logger.addHandler(handler)
 
+    # Stamp the build into the log: a submitted log that does not say which
+    # version produced it costs a round trip to find out.
+    from version import __version__
+    logger.info("RCA Desktop %s starting", __version__)
+
     previous = sys.excepthook
 
     def _excepthook(exc_type, exc, tb):
