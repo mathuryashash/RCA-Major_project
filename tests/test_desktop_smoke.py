@@ -350,3 +350,19 @@ def test_disclosure_names_what_is_collected():
     lowered = DISCLOSURE.lower()
     for expected in ("event log", "process", "network", "30 days", "never recorded"):
         assert expected in lowered, expected
+
+
+def test_window_carries_the_application_icon(qtbot, monkeypatch):
+    """A missing icon is cosmetic and must never stop the app opening."""
+    from desktop.branding import app_icon, icon_path
+    from pipeline import engine
+
+    monkeypatch.setattr(engine, "model_status", lambda path: engine.ModelStatus(
+        exists=True, age_days=1.0))
+
+    assert icon_path().exists(), f"icon missing at {icon_path()}"
+    assert not app_icon().isNull()
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert not window.windowIcon().isNull()

@@ -13,7 +13,9 @@ a = Analysis(
     [os.path.join(src_dir, "desktop", "main.py")],
     pathex=[src_dir],
     binaries=[],
-    datas=[],
+    # The .ico below stamps the executable; this copy is what Qt loads at
+    # runtime for the window icon, which is a separate mechanism.
+    datas=[(os.path.join(project_root, "assets", "logo.ico"), "assets")],
     hiddenimports=[
         "sklearn.utils._typedefs",
         "sklearn.neighbors._partition_nodes",
@@ -41,6 +43,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    icon=os.path.join(project_root, "assets", "logo.ico"),
 )
 
 coll = COLLECT(

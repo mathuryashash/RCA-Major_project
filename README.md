@@ -5,6 +5,10 @@
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" />
 </p>
 
+<p align="center">
+  <img src="assets/logo.png" width="120" alt="LocalRCA" />
+</p>
+
 <h1 align="center">Local Root Cause Analysis</h1>
 
 <p align="center">
@@ -77,15 +81,40 @@ report says "no supported causal chain" and makes no causal claim.**
 
 1. Open the repository's [Releases page](https://github.com/mathuryashash/RCA-Major_project/releases).
 2. Download `LocalRCA-vX.Y.Z-windows-x64.zip` and extract the entire ZIP to a folder you can write to, such as `C:\LocalRCA`.
-3. Open PowerShell in the extracted folder and grant consent, then install the per-user background collector:
+3. Run `RCA-Desktop\RCA-Desktop.exe`. On first launch it shows exactly what
+   will be recorded and asks whether to begin. Nothing is collected until you
+   agree.
+4. To keep collecting while the app is closed, install the background
+   collector. Open PowerShell in the extracted folder and run:
 
    ```powershell
-   .\RCA-Collector\RCA-Collector.exe accept-consent
    .\RCA-Collector\RCA-Collector.exe install
    .\RCA-Collector\RCA-Collector.exe status
    ```
 
-4. Run `RCA-Desktop\RCA-Desktop.exe`. The collector runs at every logon, even when the desktop app is closed.
+   This registers a per-user startup entry — no administrator rights needed —
+   and lists the app in Add/Remove Programs.
+
+Prefer the command line for the whole flow? `accept-consent` does in one step
+what the first-run dialog does:
+
+```powershell
+.\RCA-Collector\RCA-Collector.exe accept-consent
+.\RCA-Collector\RCA-Collector.exe install
+```
+
+### Uninstalling
+
+Either remove **LocalRCA** from Windows Settings → Apps → Installed apps, or:
+
+```powershell
+.\RCA-Collector\RCA-Collector.exe uninstall
+```
+
+Both stop collection and remove the startup entry. **Your collected data is
+deliberately left in place** — removing the autostart entry should not throw
+away a trained model without being asked. To erase it too, run
+`delete-all-data` (below), then delete the extracted folder.
 
 Do **not** move either EXE out of its folder: the adjacent `_internal` directory
 contains required runtime files. Windows may show a SmartScreen prompt for an

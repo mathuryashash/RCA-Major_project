@@ -48,3 +48,6 @@ tmp/
 
 # Word lock files
 ~$*
+
+# Word drafts: binary, and regenerated from the markdown sources
+*.docx

@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QTabWidget, QLabel, QHBoxLayout, QVBoxLayout, QWidget,
 )
 
+from desktop.branding import app_icon
 from desktop.state import AppState
 from desktop.views.data_view import DataView
 from desktop.views.stage1_view import Stage1View
@@ -17,6 +18,7 @@ class MainWindow(QMainWindow):
         # The version belongs where a user reporting a problem will see it
         # without being asked to go looking for it.
         self.setWindowTitle(f"AI-Powered Root Cause Analysis  v{__version__}")
+        self.setWindowIcon(app_icon())
         self.resize(1400, 900)
 
         self.state = AppState()

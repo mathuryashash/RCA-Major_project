@@ -52,7 +52,8 @@ $collectorArgs = @(
     '--specpath', 'build\collector',
     '--paths', 'src',
     '--additional-hooks-dir', 'packaging\hooks',
-    '--hidden-import', 'win32evtlog'
+    '--hidden-import', 'win32evtlog',
+    '--icon', 'assets\logo.ico'
 )
 
 $collectorArgs += Get-Content 'packaging\excludes.txt' |
