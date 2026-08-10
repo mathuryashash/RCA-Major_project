@@ -81,6 +81,21 @@ def default_command() -> str | None:
     return build_command(sys.executable, str(_source_launcher()))
 
 
+def default_argv() -> list[str] | None:
+    """The same launch, as an argument vector rather than a shell string.
+
+    The Startup wrapper has to be a string because a .cmd file is read by
+    cmd.exe, but launching from inside the app does not: passing a list skips
+    the shell entirely, so nothing in the profile path is ever interpreted.
+    cmd.exe expands %NAME% even inside double quotes, which quoting cannot
+    defend against.
+    """
+    if getattr(sys, "frozen", False):
+        collector = collector_executable()
+        return [str(collector), "run"] if collector else None
+    return [sys.executable, str(_source_launcher())]
+
+
 def startup_dir() -> Path:
     appdata = os.environ.get("APPDATA")
     base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
@@ -130,15 +145,18 @@ def is_registered() -> bool:
 
 def start_now(command: str | None = None) -> bool:
     """Launch the collector immediately, detached from this console."""
-    command = command or default_command()
-    if not command:
+    # A caller-supplied string still goes through the shell, since that is what
+    # it asked for; the default path builds an argument vector instead so the
+    # profile path is never handed to cmd.exe to interpret.
+    argv = command or default_argv()
+    if not argv:
         # Better to collect nothing than to launch the wrong executable.
         _LOGGER.warning("Collector executable not found; not starting one.")
         return False
     try:
         subprocess.Popen(
-            command,
-            shell=True,
+            argv,
+            shell=isinstance(argv, str),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

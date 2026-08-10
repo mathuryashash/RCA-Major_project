@@ -131,3 +131,25 @@ def test_startup_wrapper_survives_a_non_ascii_profile_path(tmp_path, monkeypatch
 
     registered = schedule.register()                # must not raise
     assert registered is schedule.is_registered()   # and must report honestly
+
+
+def test_start_now_launches_without_a_shell(tmp_path, monkeypatch):
+    """cmd.exe expands %NAME% even inside double quotes.
+
+    The Startup wrapper must be a string because a .cmd is read by cmd.exe,
+    but launching from inside the app has no such need: an argument vector
+    means nothing in the profile path is ever interpreted.
+    """
+    monkeypatch.setattr(schedule.config, "app_dir", lambda: tmp_path / "RCA")
+    captured = {}
+
+    def _fake_popen(argv, **kwargs):
+        captured["argv"] = argv
+        captured["shell"] = kwargs.get("shell")
+        return object()
+
+    monkeypatch.setattr(schedule.subprocess, "Popen", _fake_popen)
+
+    assert schedule.start_now() is True
+    assert isinstance(captured["argv"], list), captured["argv"]
+    assert captured["shell"] is False
