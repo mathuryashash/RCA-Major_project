@@ -1,5 +1,6 @@
 import os
 import sys
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -302,3 +303,50 @@ def test_root_cause_table_columns_fill_the_panel(qtbot, monkeypatch):
     qtbot.addWidget(window)
     header = window.stage2.root_cause_table.horizontalHeader()
     assert header.sectionResizeMode(0) == QHeaderView.Stretch
+
+
+def test_consent_is_asked_in_the_interface_and_gates_collection(qtbot, tmp_path, monkeypatch):
+    """Consent could only be given on a command line.
+
+    Someone who opened the desktop app and never read the README was never
+    asked, so nothing was ever collected. Declining must also be honoured.
+    """
+    from PySide6.QtWidgets import QDialog
+
+    from desktop import consent as consent_module
+    from telemetry import collector, config, store
+
+    monkeypatch.setattr(config, "app_dir", lambda: tmp_path)
+    monkeypatch.setattr(config, "db_path", lambda: tmp_path / "telemetry.db")
+
+    monkeypatch.setattr(consent_module.QDialog, "exec", lambda self: QDialog.Rejected)
+    assert consent_module.ensure_consent() is False, "declining must not start collection"
+
+    connection = store.connect(tmp_path / "telemetry.db")
+    try:
+        assert collector.consent_granted(connection) is False
+    finally:
+        connection.close()
+
+    monkeypatch.setattr(consent_module.QDialog, "exec", lambda self: QDialog.Accepted)
+    assert consent_module.ensure_consent() is True
+
+    connection = store.connect(tmp_path / "telemetry.db")
+    try:
+        assert collector.consent_granted(connection) is True
+    finally:
+        connection.close()
+
+    # Already granted: no dialog, and still true.
+    monkeypatch.setattr(consent_module.QDialog, "exec",
+                        lambda self: pytest.fail("must not ask twice"))
+    assert consent_module.ensure_consent() is True
+
+
+def test_disclosure_names_what_is_collected():
+    """A consent screen that does not say what it collects is not consent."""
+    from desktop.consent import DISCLOSURE
+
+    lowered = DISCLOSURE.lower()
+    for expected in ("event log", "process", "network", "30 days", "never recorded"):
+        assert expected in lowered, expected

@@ -105,7 +105,16 @@ def main(argv: list[str] | None = None) -> int:
         conn.close()
         return _delete_data()
     if args.command == "uninstall":
-        return 0 if schedule.unregister() else 1
+        removed = schedule.unregister()
+        schedule.remove_uninstall_entry()
+        request_stop()
+        # Uninstalling stops collection but keeps what was collected: erasing
+        # a user's data because they removed the autostart entry would be a
+        # surprise, and delete-all-data exists to be asked for explicitly.
+        print("Collection stopped and the startup entry removed.")
+        print(f"Collected data is still at {config.app_dir()}.")
+        print("Run 'delete-all-data' to erase it.")
+        return 0 if removed else 1
     if not consent_granted(conn):
         print("Consent not granted. Run 'python -m telemetry accept-consent' first.", file=sys.stderr)
         return 1
@@ -114,8 +123,11 @@ def main(argv: list[str] | None = None) -> int:
             print("Could not write the startup entry.", file=sys.stderr)
             return 1
         started = schedule.start_now()
+        listed = schedule.register_uninstall_entry()
         print(f"Registered at {schedule.startup_dir()}. Collection starts at every logon.")
         print("Collector started now." if started else "Start it now with: python -m telemetry run")
+        if listed:
+            print("Listed in Add/Remove Programs as 'LocalRCA'.")
         return 0
     if not acquire_singleton():
         print("Another collector is already running; this instance will exit.", file=sys.stderr)

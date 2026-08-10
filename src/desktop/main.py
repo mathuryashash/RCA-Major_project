@@ -125,19 +125,15 @@ def _ensure_collector_running() -> None:
     Collection still requires consent -- this never starts recording on a
     machine where the user has not agreed to it.
     """
-    from telemetry import config, schedule, store
-    from telemetry.collector import consent_granted
+    from telemetry import schedule
 
-    if not config.db_path().exists():
-        return                      # nothing collected yet, so no consent yet
+    from desktop.consent import ensure_consent
 
     try:
-        connection = store.connect(config.db_path())
-        try:
-            granted = consent_granted(connection)
-        finally:
-            connection.close()
-        if granted:
+        # Asked in the interface on first run. Previously consent could only be
+        # given by running a command, so anyone who opened the app and never
+        # read the README was never asked and never collected anything.
+        if ensure_consent():
             schedule.start_now()
     except Exception:  # noqa: BLE001 - the GUI must open regardless
         pass

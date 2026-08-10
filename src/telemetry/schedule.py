@@ -96,6 +96,58 @@ def default_argv() -> list[str] | None:
     return [sys.executable, str(_source_launcher())]
 
 
+#: Where Windows lists installed programs for the current user. Per-user, so
+#: no elevation is needed and nothing is written for other accounts.
+_UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\LocalRCA"
+
+
+def register_uninstall_entry() -> bool:
+    """List the app in Add/Remove Programs.
+
+    A ZIP that registers itself to run at every logon, with no entry in the
+    place Windows users look to remove things, is indistinguishable from
+    something unwanted. The entry points at the collector's own uninstall.
+    """
+    collector = collector_executable()
+    if collector is None:
+        return False                    # running from source: nothing installed
+    try:
+        import winreg
+
+        from . import config
+        from version import __version__
+
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _UNINSTALL_KEY) as key:
+            for name, value in (
+                ("DisplayName", "LocalRCA — Local Root Cause Analysis"),
+                ("DisplayVersion", __version__),
+                ("Publisher", "LocalRCA"),
+                ("InstallLocation", str(collector.parent.parent)),
+                ("UninstallString", f'"{collector}" uninstall'),
+                ("URLInfoAbout", "https://github.com/mathuryashash/RCA-Major_project"),
+                ("Comments", f"Collected telemetry is stored at {config.app_dir()}"),
+            ):
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+            for name in ("NoModify", "NoRepair"):
+                winreg.SetValueEx(key, name, 0, winreg.REG_DWORD, 1)
+        return True
+    except (ImportError, OSError):
+        return False
+
+
+def remove_uninstall_entry() -> bool:
+    """Take the Add/Remove Programs entry away again."""
+    try:
+        import winreg
+
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, _UNINSTALL_KEY)
+        return True
+    except FileNotFoundError:
+        return True                     # already absent is the desired state
+    except (ImportError, OSError):
+        return False
+
+
 def startup_dir() -> Path:
     appdata = os.environ.get("APPDATA")
     base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
