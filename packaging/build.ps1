@@ -53,7 +53,11 @@ $collectorArgs = @(
     '--paths', 'src',
     '--additional-hooks-dir', 'packaging\hooks',
     '--hidden-import', 'win32evtlog',
-    '--icon', 'assets\logo.ico'
+    # Absolute: --specpath sends the spec to build\collector, and PyInstaller
+    # resolves a relative --icon against the spec directory rather than the
+    # working directory, so 'assets\logo.ico' became
+    # 'build\collector\assets\logo.ico' and the build died looking for it.
+    '--icon', (Resolve-Path 'assets\logo.ico').Path
 )
 
 $collectorArgs += Get-Content 'packaging\excludes.txt' |
