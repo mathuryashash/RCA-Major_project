@@ -79,6 +79,10 @@ report says "no supported causal chain" and makes no causal claim.**
 
 ### Install the Windows release (recommended)
 
+> Full walkthrough, including uninstalling and where everything is stored:
+> **[INSTALL.md](INSTALL.md)**
+
+
 1. Open the repository's [Releases page](https://github.com/mathuryashash/RCA-Major_project/releases).
 2. Download `LocalRCA-vX.Y.Z-windows-x64.zip` and extract the entire ZIP to a folder you can write to, such as `C:\LocalRCA`.
 3. Run `RCA-Desktop\RCA-Desktop.exe`. On first launch it shows exactly what
