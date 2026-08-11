@@ -175,6 +175,10 @@ def create_start_menu_shortcut() -> bool:
         return False
 
 
+def start_menu_shortcut_exists() -> bool:
+    return _start_menu_shortcut().exists()
+
+
 def remove_start_menu_shortcut() -> bool:
     try:
         _start_menu_shortcut().unlink(missing_ok=True)

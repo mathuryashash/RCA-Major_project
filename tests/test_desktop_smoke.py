@@ -475,3 +475,36 @@ def test_disclosure_states_what_agreeing_registers():
     lowered = DISCLOSURE.lower()
     for expected in ("logon", "start menu", "remove", "administrator"):
         assert expected in lowered, expected
+
+
+def test_a_missing_start_menu_shortcut_is_restored_on_launch(qtbot, tmp_path, monkeypatch):
+    """Windows deletes shortcuts whose target has gone.
+
+    Replacing the executable -- a rebuild, or extracting a new release over an
+    old one -- removes the target long enough to qualify, and the entry
+    disappears. An installed application that cannot be found by name is the
+    same as an uninstalled one.
+    """
+    from desktop import main as desktop_main
+    from telemetry import config, schedule
+
+    monkeypatch.setattr(config, "app_dir", lambda: tmp_path)
+    monkeypatch.setattr(config, "db_path", lambda: tmp_path / "telemetry.db")
+    monkeypatch.setattr("desktop.consent.ensure_consent", lambda parent=None: True)
+    monkeypatch.setattr(schedule, "start_now", lambda: True)
+
+    remade = []
+    # Already installed: the logon entry survived, only the shortcut is gone.
+    monkeypatch.setattr(schedule, "is_registered", lambda: True)
+    monkeypatch.setattr(schedule, "start_menu_shortcut_exists", lambda: False)
+    monkeypatch.setattr(schedule, "create_start_menu_shortcut", lambda: remade.append(1) or True)
+    monkeypatch.setattr(schedule, "register", lambda: pytest.fail("must not re-register autostart"))
+
+    desktop_main._ensure_collector_running()
+    assert remade == [1], "the shortcut should have been put back"
+
+    # Present already: leave it alone.
+    remade.clear()
+    monkeypatch.setattr(schedule, "start_menu_shortcut_exists", lambda: True)
+    desktop_main._ensure_collector_running()
+    assert remade == []

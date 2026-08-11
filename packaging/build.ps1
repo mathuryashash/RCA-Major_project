@@ -67,6 +67,16 @@ $collectorArgs += Get-Content 'packaging\excludes.txt' |
 pyinstaller @collectorArgs
 if ($LASTEXITCODE -ne 0) { throw "Collector build failed (exit $LASTEXITCODE)" }
 
+# Cleaning dist removes the target of the Start menu shortcut, and Windows
+# deletes shortcuts whose target has gone as part of its own maintenance -- so
+# every rebuild silently un-listed an installed application. The desktop app
+# repairs this at launch too; doing it here closes the window in between.
+$arp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LocalRCA'
+if (Test-Path $arp) {
+    Write-Host "Restoring the Start menu shortcut..."
+    & .\dist\RCA-Collector\RCA-Collector.exe install | Out-Null
+}
+
 Write-Host "Build complete: dist\RCA-Desktop\RCA-Desktop.exe and dist\RCA-Collector\RCA-Collector.exe"
 $size = (Get-ChildItem -Recurse dist\RCA-Desktop, dist\RCA-Collector | Measure-Object -Property Length -Sum).Sum / 1MB
 Write-Host ("Total distribution size: {0:N0} MB" -f $size)

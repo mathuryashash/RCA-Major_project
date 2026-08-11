@@ -148,6 +148,14 @@ def _ensure_collector_running() -> None:
             schedule.register()
             schedule.register_uninstall_entry()
             schedule.create_start_menu_shortcut()
+        elif not schedule.start_menu_shortcut_exists():
+            # Windows deletes Start menu shortcuts whose target has gone, as
+            # part of its own maintenance. Replacing the executable -- a
+            # rebuild, or extracting a new release over an old one -- removes
+            # the target for long enough to qualify, and the entry silently
+            # disappears. Put it back rather than leaving the application
+            # installed, running at logon, and unfindable by name.
+            schedule.create_start_menu_shortcut()
     except Exception:  # noqa: BLE001 - the GUI must open regardless
         pass
 
