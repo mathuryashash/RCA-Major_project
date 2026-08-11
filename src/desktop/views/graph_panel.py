@@ -88,10 +88,34 @@ class PlotlyWebView(QWidget):
             return
         self._render(fig, self.view)
 
-    def _render(self, fig, view) -> None:
+    def _render(self, fig, view, fill: bool = False) -> None:
+        """Write the figure to a temp file and point the view at it.
+
+        ``fill`` makes the figure track the window instead of its own fixed
+        height. The figures are built at 420 and 520 pixels, which is right
+        inside a tab but left most of a full screen empty below them.
+        """
         self._file_counter += 1
         html_path = os.path.join(self._tmp_dir, f"figure_{self._file_counter}.html")
-        html = fig.to_html(include_plotlyjs=True, full_html=True)
+
+        if fill:
+            import plotly.graph_objects as go
+
+            # Copy: the caller's figure is still on display behind the dialog
+            # and must keep its own height.
+            fig = go.Figure(fig)
+            fig.update_layout(height=None, autosize=True, margin=dict(t=60, b=60, l=60, r=40))
+
+        html = fig.to_html(
+            include_plotlyjs=True, full_html=True,
+            default_height="100%" if fill else None,
+            config={"responsive": True} if fill else None,
+        )
+        # The page body is white by default, so any area the plot does not
+        # occupy shows as a white band against the dark application.
+        html = html.replace(
+            "<body>", '<body style="margin:0;height:100vh;background:#151a2e">', 1,
+        )
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html)
         view.setUrl(QUrl.fromLocalFile(html_path))
@@ -136,7 +160,7 @@ class _FullScreenFigure(QDialog):
         if _WEBENGINE_AVAILABLE:
             self.view = QWebEngineView()
             layout.addWidget(self.view, stretch=1)
-            owner._render(fig, self.view)
+            owner._render(fig, self.view, fill=True)
         else:
             layout.addWidget(QLabel("QtWebEngine is not installed."), stretch=1)
 

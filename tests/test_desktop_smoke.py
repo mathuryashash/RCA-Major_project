@@ -388,3 +388,37 @@ def test_figure_panels_are_not_blank_before_a_run(qtbot, monkeypatch):
     for panel in (window.stage2.graph_view, window.stage2.timeline_view):
         assert panel._figure is None            # nothing plotted yet
         assert hasattr(panel, "show_placeholder")
+
+
+def test_full_screen_figure_fills_the_window(qtbot, monkeypatch):
+    """The figures are built at a fixed height that left most of a screen blank.
+
+    Expanding one has to drop that height and let it track the window, and
+    must not disturb the copy still displayed in the tab behind the dialog.
+    """
+    import os
+
+    import plotly.graph_objects as go
+    from pipeline import engine
+
+    monkeypatch.setattr(engine, "model_status", lambda path: engine.ModelStatus(
+        exists=True, age_days=1.0))
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    panel = window.stage2.timeline_view
+
+    figure = go.Figure(go.Scatter(x=[1, 2, 3], y=[1, 2, 3]))
+    figure.update_layout(height=420)
+
+    panel._render(figure, panel.view, fill=False)
+    tabbed = open(os.path.join(panel._tmp_dir, "figure_1.html"), encoding="utf-8").read()
+    panel._render(figure, panel.view, fill=True)
+    expanded = open(os.path.join(panel._tmp_dir, "figure_2.html"), encoding="utf-8").read()
+
+    assert '"height":420' in tabbed.replace(" ", "")
+    assert '"height":420' not in expanded.replace(" ", "")
+    assert '"autosize":true' in expanded.replace(" ", "")
+    assert figure.layout.height == 420, "the tab's own figure must be untouched"
+    # The page body is white by default, which shows as a band around the plot.
+    assert "background:#151a2e" in expanded
