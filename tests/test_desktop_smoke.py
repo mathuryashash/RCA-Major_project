@@ -422,3 +422,56 @@ def test_full_screen_figure_fills_the_window(qtbot, monkeypatch):
     assert figure.layout.height == 420, "the tab's own figure must be untouched"
     # The page body is white by default, which shows as a band around the plot.
     assert "background:#151a2e" in expanded
+
+
+def test_agreeing_completes_the_install_without_a_command_line(qtbot, tmp_path, monkeypatch):
+    """Consent used to leave the user with a PowerShell step to discover.
+
+    Agreeing to continuous collection is agreeing to the thing that makes it
+    continuous, so the dialog now finishes the setup -- and says so.
+    """
+    from desktop import main as desktop_main
+    from telemetry import config, schedule
+
+    monkeypatch.setattr(config, "app_dir", lambda: tmp_path)
+    monkeypatch.setattr(config, "db_path", lambda: tmp_path / "telemetry.db")
+
+    done = []
+    monkeypatch.setattr(desktop_main, "ensure_consent", lambda: True, raising=False)
+    monkeypatch.setattr(schedule, "start_now", lambda: done.append("start") or True)
+    monkeypatch.setattr(schedule, "is_registered", lambda: False)
+    monkeypatch.setattr(schedule, "register", lambda: done.append("logon") or True)
+    monkeypatch.setattr(schedule, "register_uninstall_entry", lambda: done.append("arp") or True)
+    monkeypatch.setattr(schedule, "create_start_menu_shortcut", lambda: done.append("menu") or True)
+    monkeypatch.setattr("desktop.consent.ensure_consent", lambda parent=None: True)
+
+    desktop_main._ensure_collector_running()
+
+    assert done == ["start", "logon", "arp", "menu"], done
+
+
+def test_declining_registers_nothing(qtbot, tmp_path, monkeypatch):
+    """Declining must leave the machine exactly as it was found."""
+    from desktop import main as desktop_main
+    from telemetry import config, schedule
+
+    monkeypatch.setattr(config, "app_dir", lambda: tmp_path)
+    monkeypatch.setattr(config, "db_path", lambda: tmp_path / "telemetry.db")
+
+    touched = []
+    for name in ("start_now", "register", "register_uninstall_entry", "create_start_menu_shortcut"):
+        monkeypatch.setattr(schedule, name, lambda *a, n=name: touched.append(n) or True)
+    monkeypatch.setattr("desktop.consent.ensure_consent", lambda parent=None: False)
+
+    desktop_main._ensure_collector_running()
+
+    assert touched == [], touched
+
+
+def test_disclosure_states_what_agreeing_registers():
+    """Doing more than the dialog says would undermine the consent."""
+    from desktop.consent import DISCLOSURE
+
+    lowered = DISCLOSURE.lower()
+    for expected in ("logon", "start menu", "remove", "administrator"):
+        assert expected in lowered, expected

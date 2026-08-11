@@ -31,6 +31,11 @@ a = Analysis(
     cipher=block_cipher,
 )
 
+# QtWebEngine ships a debug build of its developer-tools resources, 72MB, for
+# a browser view the user cannot open devtools on. The non-debug .pak beside
+# it is the one actually loaded.
+a.datas = [entry for entry in a.datas if "devtools_resources.debug" not in entry[0]]
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(

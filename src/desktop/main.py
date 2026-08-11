@@ -133,8 +133,21 @@ def _ensure_collector_running() -> None:
         # Asked in the interface on first run. Previously consent could only be
         # given by running a command, so anyone who opened the app and never
         # read the README was never asked and never collected anything.
-        if ensure_consent():
-            schedule.start_now()
+        if not ensure_consent():
+            return
+
+        schedule.start_now()
+
+        # Finish the install from here rather than sending the user to a
+        # command line. Agreeing to continuous collection is agreeing to the
+        # thing that makes it continuous, and the dialog says so; being
+        # findable in the Start menu and removable from Add/Remove Programs is
+        # what someone who ran an application expects. All three are idempotent
+        # and all three are undone by `uninstall`.
+        if not schedule.is_registered():
+            schedule.register()
+            schedule.register_uninstall_entry()
+            schedule.create_start_menu_shortcut()
     except Exception:  # noqa: BLE001 - the GUI must open regardless
         pass
 

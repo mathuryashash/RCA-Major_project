@@ -30,11 +30,20 @@ addresses first.</p>
 <code>{config.db_path()}</code>. Nothing is uploaded. The application makes no
 network connections. Process samples are kept 30 days and events 365 days.</p>
 
-<p><b>Undoing this:</b> "Delete all data" erases the database, the trained
-model, generated reports and logs, and stops collection. Reports you export
-yourself go wherever you save them and are not tracked.</p>
+<p><b>What agreeing sets up:</b> the collector is registered to start at every
+logon, so recording continues while this window is closed — that is what makes
+a usable baseline possible. The application is also added to your Start menu
+and to Add&nbsp;/&nbsp;Remove&nbsp;Programs. No administrator rights are used,
+and nothing is written outside your own user profile.</p>
 
-<p>Collection does not start unless you agree.</p>
+<p><b>Undoing this:</b> removing <b>LocalRCA</b> from Add&nbsp;/&nbsp;Remove
+Programs, or running <code>RCA-Collector.exe uninstall</code>, reverses all
+three and stops collection while keeping what was collected.
+<code>delete-all-data</code> erases the database, the trained model, generated
+reports and logs as well. Reports you export yourself go wherever you save
+them and are not tracked.</p>
+
+<p>Nothing is collected and nothing is registered unless you agree.</p>
 """
 
 

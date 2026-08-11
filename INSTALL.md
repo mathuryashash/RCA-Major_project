@@ -39,21 +39,18 @@ On first launch it shows exactly what will be recorded — system metrics every
 Windows Event Log entries — and asks whether to begin. **Nothing is collected
 until you agree.**
 
-## 3. Keep collecting when the app is closed
+## 3. That is the installation
 
-Optional, but the tool is far more useful with it: the collector needs a
-continuous baseline, and it can only build one while it is running.
+Agreeing in step 2 finishes the setup: the collector is registered to start at
+every logon, the app is added to your Start menu, and **LocalRCA** appears in
+Add / Remove Programs. No administrator rights, nothing outside your user
+profile, and no command line.
 
-Open PowerShell in the extracted folder:
+To check on it at any point:
 
 ```powershell
-.\RCA-Collector\RCA-Collector.exe install
 .\RCA-Collector\RCA-Collector.exe status
 ```
-
-`install` registers a per-user startup entry, adds a Start menu shortcut, and
-lists the app in Add/Remove Programs. `status` reports consent, whether the
-collector is scheduled, and how much telemetry exists so far.
 
 ## 4. Wait for a baseline
 
@@ -73,7 +70,7 @@ Run these from the extracted folder as `.\RCA-Collector\RCA-Collector.exe <comma
 | Command | What it does |
 |---|---|
 | `accept-consent` | Grants consent from the command line instead of the dialog |
-| `install` | Startup entry, Start menu shortcut, Add/Remove Programs entry |
+| `install` | Registers all three by hand. The app does this on first launch, so it is only needed if you declined and changed your mind |
 | `status` | Consent, schedule state, sample count |
 | `uninstall` | Stops collection and removes all three. **Keeps your data** |
 | `delete-all-data` | Erases everything collected. See below |

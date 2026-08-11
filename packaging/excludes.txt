@@ -355,6 +355,10 @@ openenv_core
 openface
 openpyxl
 ordlookup
+# pandas imports pyarrow only for parquet, feather and arrow-backed dtypes.
+# This application reads and writes SQLite and CSV, so 79MB of Arrow ships
+# for nothing.
+pyarrow
 orjson
 ormsgpack
 outcome
