@@ -135,6 +135,54 @@ def register_uninstall_entry() -> bool:
         return False
 
 
+def _start_menu_shortcut() -> Path:
+    appdata = os.environ.get("APPDATA")
+    base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+    return base / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "LocalRCA.lnk"
+
+
+def desktop_executable() -> Path | None:
+    """The GUI beside the collector, or None when running from source."""
+    collector = collector_executable()
+    if collector is None:
+        return None
+    candidate = collector.parent.parent / "RCA-Desktop" / "RCA-Desktop.exe"
+    return candidate if candidate.exists() else None
+
+
+def create_start_menu_shortcut() -> bool:
+    """Put the app where Windows search will find it.
+
+    An Add/Remove Programs entry lists the app under Settings, but Start menu
+    search indexes shortcuts -- so without one the application is installed,
+    running at logon, and unfindable by name.
+    """
+    target = desktop_executable()
+    if target is None:
+        return False                    # source checkout: nothing to point at
+    try:
+        import win32com.client
+
+        shell = win32com.client.Dispatch("WScript.Shell")
+        link = shell.CreateShortCut(str(_start_menu_shortcut()))
+        link.TargetPath = str(target)
+        link.WorkingDirectory = str(target.parent)
+        link.IconLocation = str(target)
+        link.Description = "Local Root Cause Analysis"
+        link.save()
+        return _start_menu_shortcut().exists()
+    except Exception:                   # noqa: BLE001 - a missing shortcut is cosmetic
+        return False
+
+
+def remove_start_menu_shortcut() -> bool:
+    try:
+        _start_menu_shortcut().unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
 def remove_uninstall_entry() -> bool:
     """Take the Add/Remove Programs entry away again."""
     try:

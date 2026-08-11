@@ -153,3 +153,29 @@ def test_start_now_launches_without_a_shell(tmp_path, monkeypatch):
     assert schedule.start_now() is True
     assert isinstance(captured["argv"], list), captured["argv"]
     assert captured["shell"] is False
+
+
+def test_start_menu_shortcut_is_skipped_without_a_packaged_app(monkeypatch):
+    """A source checkout must not advertise itself as installed software."""
+    monkeypatch.setattr(schedule, "collector_executable", lambda: None)
+
+    assert schedule.desktop_executable() is None
+    assert schedule.create_start_menu_shortcut() is False
+    # Removing one that was never made is the desired end state, not an error.
+    assert schedule.remove_start_menu_shortcut() is True
+
+
+def test_start_menu_shortcut_points_at_the_desktop_app(tmp_path, monkeypatch):
+    """Windows search indexes shortcuts, so without one the app is unfindable."""
+    collector = tmp_path / "RCA-Collector" / "RCA-Collector.exe"
+    collector.parent.mkdir(parents=True)
+    collector.write_text("x")
+    gui = tmp_path / "RCA-Desktop" / "RCA-Desktop.exe"
+    gui.parent.mkdir(parents=True)
+    gui.write_text("x")
+
+    monkeypatch.setattr(schedule, "collector_executable", lambda: collector)
+
+    # It must target the GUI, never the collector: searching for the app and
+    # launching a console collector would be the wrong result.
+    assert schedule.desktop_executable() == gui

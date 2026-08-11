@@ -107,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "uninstall":
         removed = schedule.unregister()
         schedule.remove_uninstall_entry()
+        schedule.remove_start_menu_shortcut()
         request_stop()
         # Uninstalling stops collection but keeps what was collected: erasing
         # a user's data because they removed the autostart entry would be a
@@ -124,10 +125,13 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         started = schedule.start_now()
         listed = schedule.register_uninstall_entry()
+        searchable = schedule.create_start_menu_shortcut()
         print(f"Registered at {schedule.startup_dir()}. Collection starts at every logon.")
         print("Collector started now." if started else "Start it now with: python -m telemetry run")
         if listed:
             print("Listed in Add/Remove Programs as 'LocalRCA'.")
+        if searchable:
+            print("Added to the Start menu — search for 'LocalRCA'.")
         return 0
     if not acquire_singleton():
         print("Another collector is already running; this instance will exit.", file=sys.stderr)
