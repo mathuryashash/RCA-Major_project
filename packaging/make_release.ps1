@@ -40,6 +40,10 @@ LocalRCA v$version
 Start here:  INSTALL.md
 Run:         RCA-Desktop\RCA-Desktop.exe
 
+The FIRST launch takes about a minute -- Windows scans several thousand
+newly extracted files. Every launch after that takes under ten seconds.
+Nothing is wrong; give it a minute.
+
 Keep each .exe inside its own folder -- the adjacent _internal directory
 holds its runtime. Move the whole folder if you need to relocate it.
 

@@ -34,6 +34,11 @@ release is published from this repository before choosing **Run anyway**.
 
 Run `RCA-Desktop\RCA-Desktop.exe`.
 
+> **The first launch is slow — around a minute — and that is expected.**
+> Windows Defender scans several thousand freshly extracted files the first
+> time they are touched. Measured here: **52 seconds** on the first run and
+> **9.5 seconds** on every run after. Nothing is wrong; give it a minute.
+
 On first launch it shows exactly what will be recorded — system metrics every
 30 seconds, the busiest process names every 5 minutes, and an allowlist of
 Windows Event Log entries — and asks whether to begin. **Nothing is collected
