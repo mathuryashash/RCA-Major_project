@@ -60,24 +60,6 @@ def test_stage2_unlocks_once_a_model_exists(qtbot, monkeypatch):
     assert window.stage2.run_button.isEnabled() is True
 
 
-def test_stage2_relocks_after_a_run_reports_a_stale_model(qtbot, monkeypatch):
-    """Drift is only measurable during a run, so the gate latches afterwards."""
-    from pipeline import engine
-
-    monkeypatch.setattr(engine, "model_status", lambda path: engine.ModelStatus(
-        exists=True, age_days=1.0))
-
-    window = MainWindow()
-    qtbot.addWidget(window)
-    window.stage2.set_enabled(True)
-    assert window.stage2.run_button.isEnabled() is True
-
-    window.stage2._model_stale = True
-    window.stage2._apply_model_gate(True)
-    assert window.stage2.run_button.isEnabled() is False
-    assert "Retrain" in window.stage2.model_warning.text()
-
-
 def test_stage1_train_button_gated_on_uninterrupted_baseline(qtbot, monkeypatch):
     from pipeline import engine
     from telemetry.analysis import BaselineStatus
@@ -366,3 +348,43 @@ def test_window_carries_the_application_icon(qtbot, monkeypatch):
     window = MainWindow()
     qtbot.addWidget(window)
     assert not window.windowIcon().isNull()
+
+
+def test_drift_warns_but_does_not_lock_the_stage(qtbot, monkeypatch):
+    """One look at an old incident used to disable analysis entirely.
+
+    Drift is measured against whichever window was analysed, so examining any
+    older incident reports the model stale -- a property of that window, not
+    of the model. Latching the run button off left no way to try a different
+    range or lag without retraining first.
+    """
+    from pipeline import engine
+
+    monkeypatch.setattr(engine, "model_status", lambda path: engine.ModelStatus(
+        exists=True, age_days=1.0))
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.stage2.set_enabled(True)
+    assert window.stage2.run_button.isEnabled() is True
+
+    window.stage2._model_stale = True
+    window.stage2._apply_model_gate(True)
+
+    assert window.stage2.run_button.isEnabled() is True, "a second run must stay possible"
+    assert window.stage2.model_warning.isVisibleTo(window.stage2) is True
+    assert "drift" in window.stage2.model_warning.text().lower()
+
+
+def test_figure_panels_are_not_blank_before_a_run(qtbot, monkeypatch):
+    """An untouched web view paints white, which reads as a broken chart."""
+    from pipeline import engine
+
+    monkeypatch.setattr(engine, "model_status", lambda path: engine.ModelStatus(
+        exists=True, age_days=1.0))
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    for panel in (window.stage2.graph_view, window.stage2.timeline_view):
+        assert panel._figure is None            # nothing plotted yet
+        assert hasattr(panel, "show_placeholder")

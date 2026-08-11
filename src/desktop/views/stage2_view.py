@@ -113,6 +113,12 @@ class Stage2View(QWidget):
             ),
         )
         self.results_tabs.addTab(self.timeline_view, "Anomaly Timeline")
+        self.graph_view.show_placeholder(
+            "The causal graph appears here after an analysis."
+        )
+        self.timeline_view.show_placeholder(
+            "The anomaly timeline appears here after an analysis."
+        )
         self.report_text = QPlainTextEdit()
         self.report_text.setReadOnly(True)
         self.results_tabs.addTab(self.report_text, "Report")
@@ -149,16 +155,22 @@ class Stage2View(QWidget):
             self.model_warning.setVisible(True)
             self.run_button.setEnabled(False)
             return
+        # Warn about drift; do not lock the stage over it. Drift is measured
+        # against whichever window was analysed, so examining any older
+        # incident reports the model stale -- a property of that window, not
+        # of the model. Latching the button off meant one look at last week
+        # disabled analysis entirely until a retrain, with no way to try a
+        # different range or lag. The report states the caveat on every run.
         if self._model_stale:
             self.model_warning.setText(
-                "RCA disabled — the model no longer matches current usage "
-                f"(reconstruction error drifted past {engine.STALENESS_RATIO}x its "
-                "training-time reference). Retrain in Stage 1."
+                "Model drift detected — reconstruction error on the last window "
+                f"passed {engine.STALENESS_RATIO}x its training-time reference. "
+                "Results stay usable, but retrain in Stage 1 if the window was "
+                "recent. Analysing an older incident often reports this."
             )
             self.model_warning.setVisible(True)
-            self.run_button.setEnabled(False)
-            return
-        self.model_warning.setVisible(False)
+        else:
+            self.model_warning.setVisible(False)
         self.run_button.setEnabled(stage_enabled)
 
     def _on_incident_changed(self):

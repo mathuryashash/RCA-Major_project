@@ -67,6 +67,21 @@ class PlotlyWebView(QWidget):
             )
             layout.addWidget(self.view, stretch=1)
 
+    def show_placeholder(self, message: str) -> None:
+        """Fill the panel before anything has been plotted.
+
+        An untouched QWebEngineView paints blank white, which against a dark
+        application reads as a broken chart rather than an empty one.
+        """
+        if not _WEBENGINE_AVAILABLE:
+            return
+        self.view.setHtml(
+            "<html><body style=\"margin:0;height:100vh;display:flex;"
+            "align-items:center;justify-content:center;background:#151a2e;"
+            "color:#7c8aa5;font-family:Inter,Segoe UI,sans-serif;font-size:14px\">"
+            f"<div>{message}</div></body></html>"
+        )
+
     def show_figure(self, fig) -> None:
         self._figure = fig
         if not _WEBENGINE_AVAILABLE:
