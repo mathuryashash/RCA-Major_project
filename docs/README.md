@@ -8,6 +8,7 @@
 | [WORKFLOW.md](WORKFLOW.md) | End to end, install to report, with measured timings |
 | [IMPLEMENTATION_PAPER.md](IMPLEMENTATION_PAPER.md) | The formal write-up, built from instrumented runs |
 | [INTERVIEW_PREP.md](INTERVIEW_PREP.md) | Questions to expect, with grounded answers |
+| [RESUME_MATERIAL.md](RESUME_MATERIAL.md) | CV bullets with the measurements behind them, and the claims to avoid |
 
 Setup and usage live outside this folder: [INSTALL.md](../INSTALL.md) and the
 [README](../README.md).
