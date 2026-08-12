@@ -149,14 +149,33 @@ def load_process_attribution(
             # CPU, not a consumer. Left in, it tops every CPU ranking and names
             # idleness as the cause of a slowdown.
             "AND name NOT IN ('System Idle Process') "
-            "GROUP BY name "
-            "ORDER BY avg_cpu_pct DESC, io_bytes DESC LIMIT ?",
+            "GROUP BY name",
             connection,
-            params=(int(start.timestamp()), int(end.timestamp()), limit),
+            params=(int(start.timestamp()), int(end.timestamp())),
         )
     finally:
         connection.close()
-    return frame
+    if frame.empty:
+        return frame
+
+    # Rank by CPU *and* by memory, not by CPU alone. Measured on an injected
+    # memory fault: a process holding 1.15 GB while sleeping uses no CPU, so
+    # ordering by avg_cpu_pct could never surface it -- the run detected the
+    # anomaly and then attributed it to SearchIndexer, Taskmgr and MsMpEng.
+    # max_rss_bytes was already selected and simply never sorted on.
+    #
+    # Half the slots to each, deduplicated, so a report still holds `limit`
+    # rows. ProcessSampler already takes the union of the CPU-heaviest and
+    # RSS-heaviest processes for the same reason; this is that rule applied
+    # one layer later.
+    half = max(1, limit // 2)
+    ranked = pd.concat([
+        frame.nlargest(half, "avg_cpu_pct"),
+        frame.nlargest(half, "max_rss_bytes"),
+    ]).drop_duplicates(subset="name")
+    return (ranked.sort_values("avg_cpu_pct", ascending=False)
+                  .head(limit)
+                  .reset_index(drop=True))
 
 
 def store_summary(path: Path | str | None = None) -> dict:

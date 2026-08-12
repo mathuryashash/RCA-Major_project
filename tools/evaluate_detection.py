@@ -198,6 +198,19 @@ def evaluate(fault: str, start: pd.Timestamp, end: pd.Timestamp) -> int:
         print("  The detector did not flag the metric the injected fault moves.")
         print("  That is a real negative result, not a harness problem.")
         return 1
+
+    if not attributed:
+        # This used to print and be ignored, so the run scored PASS while
+        # naming the wrong culprit. The memory fault is what exposed it:
+        # detection succeeded, attribution returned SearchIndexer and Taskmgr,
+        # and the harness called it a pass -- while the checklist claimed
+        # "assert the correct process is attributed" on that evidence.
+        # Knowing *that* something is wrong without knowing *what* did it is
+        # half a diagnosis, so it fails here.
+        print()
+        print("  The fault was detected but attributed to the wrong processes.")
+        print("  Naming the culprit is half the job; this is a real failure.")
+        return 1
     return 0
 
 
