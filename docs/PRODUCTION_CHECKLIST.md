@@ -35,28 +35,44 @@ next logon, and everything downstream inherited it.
 `tools/evaluate_detection.py` causes a known disturbance and scores what the
 pipeline saw. **First measured results on this machine:**
 
-| Run | Metrics flagged | Result |
-|---|---|---|
-| CPU burn, 14 workers, 7 min | **6 of 29**, including `cpu_pct` and `cpu_pct_max_core`; attributed to `python.exe` | **PASS** |
-| Idle, 30 min, 60 samples | **1 of 29** (`mem_available_mb`), with Windows Search indexing | 3.4% false-positive rate |
+| Run | Samples | Flagged | Causality | Result |
+|---|---|---|---|---|
+| CPU burn, 7 min | 14 | 6 of 29, correct metrics present | **never tested** — below the Granger floor | PASS (detection only) |
+| CPU burn, 30 min | 60 | 6 of 29 | **6 edges survived** of 10 significant pairs | **PASS** |
+| Idle, 30 min | 60 | 1 of 29 (`mem_available_mb`) | no chain | 3.4% false positives |
 
-Six under load against one at rest is the useful comparison: the detector
-discriminates rather than firing at everything. This is the first evidence in
-the project that detection works at all, rather than a plausibility judgement.
+**The 30-minute run is the one that settles it.** We caused a CPU burn, and
+the ranking named it:
 
-- [x] Inject known faults and assert they are detected
+```
+1. cpu_pct            score 1.000   Critical
+2. cpu_pct_max_core   score 0.916   High
+3. swap_used_delta    score 0.719   Medium
+```
+
+The causal directions are right too — CPU drives the rest, nothing drives CPU:
+
+```
+cpu_pct_max_core → disk_busy_pct    lag=2   strength 0.756
+cpu_pct_max_core → swap_used_delta  lag=3   strength 0.262
+swap_used_delta  → disk_busy_pct    lag=2   strength 0.436
+```
+
+Same fault and same code at 7 and 30 minutes, differing only in duration:
+**the causal layer was never broken, it was starved.** It also correctly
+reported "not tested, window too short" at 7 minutes instead of inventing an
+answer, which is the reporting change from earlier doing its job.
+
+- [x] Inject a known fault and assert it is detected
 - [x] Assert the correct process is attributed
 - [x] Measure the false-positive rate at rest
-- [ ] Disk and memory faults — implemented, never run
-- [ ] Longer injections: a 7-minute window holds ~14 samples, below the
-      Granger floor, so **causality went untested even in a controlled
-      experiment**. Real causal evaluation needs ~30-minute faults
-- [ ] Track causal yield across many incidents
-- [ ] Repeat on a second machine — everything here is one host
-
-Detection is now measured. **Root-cause *ranking* is still not**: no run has
-yet produced surviving causal edges under a known fault, so whether the
-ranking points at the right cause remains unevidenced.
+- [x] **Assert the ranking names the injected cause** — `cpu_pct` first at 1.000
+- [ ] Memory fault — bounded now, but not run here: this machine had 0.3 GB
+      free of 15.7 GB, and a memory hog would have forced the session into swap
+- [ ] Track causal yield across many incidents rather than one
+- [ ] Repeat on a second machine — every number here is from one host
+- [ ] Test a fault whose cause is *not* the top-ranked metric, to check the
+      ranking can be wrong in a detectable way
 
 ### ⚠️ Long-run stability
 
@@ -227,9 +243,16 @@ reporting refuses to overstate its evidence — which is rarer than it sounds.
   CPU burn with the right ones present and the load correctly attributed,
   against 1 of 29 at rest.
 
-**What is still unevidenced is the ranking.** No controlled run has yet
-produced a surviving causal edge, because a 7-minute injection holds fewer
-samples than Granger needs. Detection working says nothing about whether the
-*root cause* named is the right one, and that remains the honest gap.
+**The ranking is now evidenced once.** A 30-minute CPU burn produced six
+surviving causal edges and put `cpu_pct` first at a score of 1.000, with the
+causal directions pointing away from CPU rather than toward it. That is the
+first end-to-end demonstration that the pipeline identifies a cause it was
+never told about.
+
+**One success is not a measurement.** It is a single fault, of a single kind,
+on a single machine, where the answer happened to be the most obvious metric.
+The harder tests — a fault whose cause is not the loudest signal, and repeats
+across machines — remain undone, and until those exist the honest claim is
+"demonstrated once", not "validated".
 
 Everything in P2 and P3 is polish by comparison.

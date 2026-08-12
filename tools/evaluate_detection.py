@@ -70,15 +70,28 @@ def _burn_disk(stop_at: float, path: Path) -> None:
     path.unlink(missing_ok=True)
 
 
-def _burn_memory(stop_at: float) -> None:
+def _burn_memory(stop_at: float, budget_bytes: int) -> None:
+    """Hold a bounded amount of memory, never all of it.
+
+    This originally allocated until MemoryError. On a machine with little
+    free RAM that means forcing the whole session into swap, freezing the
+    desktop, and possibly taking other applications with it -- a diagnostic
+    tool must not do that to the machine it is diagnosing. The caller sizes
+    the budget against what is actually free.
+    """
     blocks = []
+    held = 0
+    step = 64 * 1024 * 1024
     while time.time() < stop_at:
-        try:
-            blocks.append(bytearray(64 * 1024 * 1024))   # 64MB a step
-            for offset in range(0, len(blocks[-1]), 4096):
-                blocks[-1][offset] = 1                   # touch it, or it is not resident
-        except MemoryError:
-            blocks.clear()
+        if held + step <= budget_bytes:
+            try:
+                block = bytearray(step)
+                for offset in range(0, len(block), 4096):
+                    block[offset] = 1            # touch it, or it is not resident
+                blocks.append(block)
+                held += step
+            except MemoryError:
+                break                            # respect the machine over the test
         time.sleep(2)
 
 
@@ -96,7 +109,16 @@ def inject(fault: str, minutes: float) -> tuple[pd.Timestamp, pd.Timestamp]:
         scratch = Path(config.app_dir()) / "evaluation_scratch.bin"
         workers.append(multiprocessing.Process(target=_burn_disk, args=(stop_at, scratch)))
     elif fault == "memory":
-        workers.append(multiprocessing.Process(target=_burn_memory, args=(stop_at,)))
+        # Half of what is free, capped at 2GB. Enough to move the memory
+        # metrics; never enough to push the machine into swap thrashing.
+        try:
+            import psutil
+
+            budget = min(2 * 1024**3, int(psutil.virtual_memory().available * 0.5))
+        except Exception:                       # noqa: BLE001 - fall back to modest
+            budget = 512 * 1024**2
+        print(f"  memory budget: {budget / 1024**3:.2f} GB (bounded deliberately)")
+        workers.append(multiprocessing.Process(target=_burn_memory, args=(stop_at, budget)))
 
     started = pd.Timestamp.now(tz="UTC")
     for worker in workers:
