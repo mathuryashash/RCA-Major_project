@@ -179,3 +179,46 @@ def test_start_menu_shortcut_points_at_the_desktop_app(tmp_path, monkeypatch):
     # It must target the GUI, never the collector: searching for the app and
     # launching a console collector would be the wrong result.
     assert schedule.desktop_executable() == gui
+
+
+def test_register_installs_a_supervisor_for_a_packaged_collector(tmp_path, monkeypatch):
+    """A collector that dies mid-session used to stay dead until next logon.
+
+    Task Scheduler is the proper mechanism and needs elevation, which this
+    tool has no business demanding, so the logon entry starts a supervisor
+    that restarts the collector instead.
+    """
+    collector = tmp_path / "RCA-Collector" / "RCA-Collector.exe"
+    collector.parent.mkdir(parents=True)
+    collector.write_text("x")
+
+    monkeypatch.setattr(schedule.config, "app_dir", lambda: tmp_path / "RCA")
+    monkeypatch.setattr(schedule, "startup_dir", lambda: tmp_path / "Startup")
+    monkeypatch.setattr(schedule, "collector_executable", lambda: collector)
+
+    assert schedule.register() is True
+
+    wrapper = (tmp_path / "Startup" / "rca-collector.cmd").read_text()
+    assert "supervise.ps1" in wrapper
+    assert "Hidden" in wrapper, "the supervisor must not leave a console open"
+
+    script = schedule.supervisor_path().read_text(encoding="utf-8")
+    assert str(collector) in script
+    assert "stop.flag" in script, "it must honour a stop request"
+    assert "Start-Sleep" in script, "restarts must back off"
+
+    # Uninstalling takes the supervisor with it.
+    assert schedule.unregister() is True
+    assert not schedule.supervisor_path().exists()
+
+
+def test_source_checkout_registers_no_supervisor(tmp_path, monkeypatch):
+    """There is no packaged collector to supervise from a checkout."""
+    monkeypatch.setattr(schedule.config, "app_dir", lambda: tmp_path / "RCA")
+    monkeypatch.setattr(schedule, "startup_dir", lambda: tmp_path / "Startup")
+    monkeypatch.setattr(schedule, "collector_executable", lambda: None)
+
+    assert schedule.register() is True
+    wrapper = (tmp_path / "Startup" / "rca-collector.cmd").read_text()
+    assert "supervise.ps1" not in wrapper
+    assert "telemetry_launcher.py" in wrapper

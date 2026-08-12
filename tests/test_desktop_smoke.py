@@ -508,3 +508,38 @@ def test_a_missing_start_menu_shortcut_is_restored_on_launch(qtbot, tmp_path, mo
     monkeypatch.setattr(schedule, "start_menu_shortcut_exists", lambda: True)
     desktop_main._ensure_collector_running()
     assert remade == []
+
+
+def test_window_fits_the_screen_it_opens_on(qtbot, monkeypatch):
+    """A fixed 1400x900 does not fit a 1366x768 laptop panel.
+
+    The window opened with its lower edge -- the export buttons and the status
+    line -- below the bottom of the screen, unreachable.
+    """
+    from PySide6.QtCore import QRect
+    from pipeline import engine
+
+    from desktop import main_window as mw
+
+    monkeypatch.setattr(engine, "model_status", lambda path: engine.ModelStatus(
+        exists=True, age_days=1.0))
+
+    class _Screen:
+        def __init__(self, w, h):
+            self._geometry = QRect(0, 0, w, h)
+
+        def availableGeometry(self):
+            return self._geometry
+
+    # A common small laptop panel.
+    monkeypatch.setattr(mw.QApplication, "primaryScreen", staticmethod(lambda: _Screen(1366, 768)))
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert window.width() <= 1366 and window.height() <= 768, window.size()
+
+    # A large desktop display: comfortable, not the entire desktop.
+    monkeypatch.setattr(mw.QApplication, "primaryScreen", staticmethod(lambda: _Screen(3840, 2160)))
+    wide = MainWindow()
+    qtbot.addWidget(wide)
+    assert wide.width() <= mw.PREFERRED_SIZE[0]
+    assert wide.height() <= mw.PREFERRED_SIZE[1]

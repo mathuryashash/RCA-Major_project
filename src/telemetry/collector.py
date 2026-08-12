@@ -31,6 +31,12 @@ def acquire_singleton() -> bool:
     return bool(_MUTEX_HANDLE) and ctypes.windll.kernel32.GetLastError() != _ERROR_ALREADY_EXISTS
 
 
+#: Twenty consecutive failures is ten minutes at the sampling cadence. A
+#: transient fault clears well inside that; anything still failing is not
+#: going to be fixed by a twenty-first attempt.
+MAX_CONSECUTIVE_FAILURES = 20
+
+
 def request_stop() -> None:
     config.app_dir().mkdir(parents=True, exist_ok=True)
     config.stop_flag_path().touch()
@@ -101,11 +107,31 @@ class Collector:
         self.maybe_purge(wall_now, mono_now)
 
     def run_forever(self) -> None:
+        """Sample until asked to stop, surviving anything a tick can throw.
+
+        A tick failure is logged and the loop continues -- a transient WMI or
+        Event Log error must not end a collection run that is building a
+        baseline over hours. Failures are counted, and a run that is failing
+        every single tick gives up rather than writing a log entry every
+        thirty seconds forever: at that point something is wrong that
+        retrying will not fix.
+        """
         config.stop_flag_path().unlink(missing_ok=True)
+        consecutive_failures = 0
         while not config.stop_flag_path().exists():
             started = time.monotonic()
             try:
                 self.run_once()
+                consecutive_failures = 0
             except Exception:
-                _LOGGER.exception("Telemetry tick failed")
+                consecutive_failures += 1
+                _LOGGER.exception(
+                    "Telemetry tick failed (%d in a row)", consecutive_failures
+                )
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    _LOGGER.error(
+                        "Giving up after %d consecutive failures; run "
+                        "'status' and check this log.", consecutive_failures
+                    )
+                    return
             time.sleep(max(0.0, config.SYSTEM_CADENCE_S - (time.monotonic() - started)))

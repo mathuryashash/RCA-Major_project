@@ -34,3 +34,32 @@ def test_consent_is_required_and_gap_resets_rates(tmp_path, monkeypatch):
 def test_burst_logic_handles_missing_values():
     assert collector.Collector.should_burst({"cpu_pct": 81})
     assert not collector.Collector.should_burst({"cpu_pct": None, "mem_pct": None, "disk_busy_pct": None})
+
+
+def test_collector_survives_tick_failures_but_gives_up_eventually():
+    """A transient fault must not end a run building an hours-long baseline.
+
+    But a collector failing every single tick should stop rather than write a
+    log entry every thirty seconds forever.
+    """
+    from telemetry import collector as collector_module
+
+    class _AlwaysFails(collector_module.Collector):
+        def __init__(self):                       # no database needed
+            self.calls = 0
+
+        def run_once(self, *args, **kwargs):
+            self.calls += 1
+            raise RuntimeError("sampler exploded")
+
+    broken = _AlwaysFails()
+    import telemetry.config as config_module
+
+    original = config_module.SYSTEM_CADENCE_S
+    config_module.SYSTEM_CADENCE_S = 0            # do not sleep through the test
+    try:
+        broken.run_forever()
+    finally:
+        config_module.SYSTEM_CADENCE_S = original
+
+    assert broken.calls == collector_module.MAX_CONSECUTIVE_FAILURES
