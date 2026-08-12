@@ -9,37 +9,54 @@ without caveats. Ordered by what would embarrass the project first.
 
 ## P0 — Blocks calling this a product
 
-### ❌ Collection coverage and collector supervision
+### ⚠️ Collection coverage and collector supervision
 
-**Measured: 27.8% coverage over 13.2 days, median unbroken segment 8.5 minutes.**
+**Measured before the fix: 27.8% coverage over 13.2 days, median unbroken
+segment 8.5 minutes.** A collector that died mid-session stayed dead until the
+next logon, and everything downstream inherited it.
 
-The collector is a Startup-folder entry with nothing watching it. If it dies
-mid-session it stays dead until the next logon. Everything downstream inherits
-this: fragmented training data, unanalysable incident windows, unstable drift
-readings.
-
-*This is the single highest-value fix in the project.* Nothing about the model
-matters until the data underneath it is continuous.
-
-- [ ] Restart the collector automatically when it dies (watchdog, or a
-      Windows Service, or a scheduled task with restart-on-failure)
-- [ ] Record why it stopped — clean exit, crash, or machine sleep
-- [ ] Surface coverage prominently in the UI, not buried in Captured Data
+- [x] Restart the collector when it dies. Task Scheduler is the proper
+      mechanism and needs elevation — measured, the COM API returns
+      `E_ACCESSDENIED` as a standard user — so the logon entry starts a hidden
+      PowerShell supervisor instead, backing off and giving up after twelve
+      attempts
+- [x] Verified: killed the collector, supervisor restarted it within 45s
+- [x] The sampling loop survives tick failures and stops after 20 consecutive
+      ones rather than logging forever
+- [ ] **Re-measure coverage over a fresh multi-day window.** The 27.8% figure
+      predates supervision *and* was depressed by rebuilds killing the
+      collector, so it cannot be compared directly
+- [ ] Record why it stopped — clean exit, crash, or sleep
+- [ ] Surface coverage prominently in the UI
 - [ ] Target: **>90% coverage, median segment measured in hours**
 
-### ❌ Evaluation harness
+### ⚠️ Evaluation harness
 
-There is no ground truth, so there is **no measured precision or recall
-anywhere in this project**. Every correctness claim is a plausibility
-judgement.
+`tools/evaluate_detection.py` causes a known disturbance and scores what the
+pipeline saw. **First measured results on this machine:**
 
-- [ ] Inject known faults — CPU stressor, disk filler, memory hog — and assert
-      they are detected
-- [ ] Assert the correct process is attributed
-- [ ] Measure the false-positive rate on an idle machine overnight
-- [ ] Track causal yield: what fraction of runs produce ≥1 surviving edge
+| Run | Metrics flagged | Result |
+|---|---|---|
+| CPU burn, 14 workers, 7 min | **6 of 29**, including `cpu_pct` and `cpu_pct_max_core`; attributed to `python.exe` | **PASS** |
+| Idle, 30 min, 60 samples | **1 of 29** (`mem_available_mb`), with Windows Search indexing | 3.4% false-positive rate |
 
-Until this exists, "is the root cause correct?" has no answer.
+Six under load against one at rest is the useful comparison: the detector
+discriminates rather than firing at everything. This is the first evidence in
+the project that detection works at all, rather than a plausibility judgement.
+
+- [x] Inject known faults and assert they are detected
+- [x] Assert the correct process is attributed
+- [x] Measure the false-positive rate at rest
+- [ ] Disk and memory faults — implemented, never run
+- [ ] Longer injections: a 7-minute window holds ~14 samples, below the
+      Granger floor, so **causality went untested even in a controlled
+      experiment**. Real causal evaluation needs ~30-minute faults
+- [ ] Track causal yield across many incidents
+- [ ] Repeat on a second machine — everything here is one host
+
+Detection is now measured. **Root-cause *ranking* is still not**: no run has
+yet produced surviving causal edges under a known fault, so whether the
+ranking points at the right cause remains unevidenced.
 
 ### ⚠️ Long-run stability
 
@@ -201,9 +218,18 @@ A concrete list you can execute.
 consent and uninstall are honest, licensing obligations are met, and the
 reporting refuses to overstate its evidence — which is rarer than it sounds.
 
-**The two things that matter most are both absent:** the collector is
-unsupervised, so the data underneath everything is 27.8% complete; and there
-is no evaluation harness, so nobody can say whether the answers are right.
+**Both P0 items have moved**, though neither is finished:
 
-Everything in P2 and P3 is polish. Those two are the difference between a
-project that demonstrates a technique and a tool someone can rely on.
+- The collector is supervised now and demonstrably restarts after a kill. What
+  remains is measuring whether coverage actually rises over a fresh multi-day
+  window — the 27.8% figure predates the fix and cannot be compared to it.
+- Detection is measured for the first time: 6 of 29 metrics flagged under a
+  CPU burn with the right ones present and the load correctly attributed,
+  against 1 of 29 at rest.
+
+**What is still unevidenced is the ranking.** No controlled run has yet
+produced a surviving causal edge, because a 7-minute injection holds fewer
+samples than Granger needs. Detection working says nothing about whether the
+*root cause* named is the right one, and that remains the honest gap.
+
+Everything in P2 and P3 is polish by comparison.
