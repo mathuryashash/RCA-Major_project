@@ -40,6 +40,7 @@ pipeline saw. **First measured results on this machine:**
 | CPU burn, 7 min | 14 | 6 of 29, correct metrics present | **never tested** — below the Granger floor | PASS (detection only) |
 | CPU burn, 30 min | 60 | 6 of 29 | **6 edges survived** of 10 significant pairs | **PASS** |
 | Disk burn, 30 min | 60 | 4 of 29 | 1 pair accepted, **pruned by topology** | PASS, unexplained |
+| Memory hold, 30 min | 60 | 2 of 29 | no chain | **FAIL — wrong culprit named** |
 | Idle, 30 min | 60 | 1 of 29 (`mem_available_mb`) | no chain | 3.4% false positives |
 
 **The 30-minute run is the one that settles it.** We caused a CPU burn, and
@@ -81,12 +82,29 @@ That run also caught a **reporting defect, now fixed**: a topology-pruned pair
 was described as "no edge survived multiple-testing correction", blaming the
 statistics for a decision the map made. The two are now distinguished.
 
+**The memory run failed, and the failure was in production, not the test.**
+A process held 1.15 GB while sleeping. Detection worked; attribution named
+`SearchIndexer.exe`, `WmiPrvSE.exe`, `Taskmgr.exe` and `MsMpEng.exe`, and the
+process actually responsible never appeared. `load_process_attribution` ordered
+by `avg_cpu_pct` — `max_rss_bytes` was selected and never sorted on — so a
+memory-bound cause could not be named **in any incident, ever**. Fixed by
+ranking on both; verified against the recorded window, where `python.exe` now
+appears at 1,537 MB.
+
+**The harness was also wrong, and worse.** It printed `ATTRIBUTED to us: no`
+and returned PASS, because only detection gated the verdict. The line below
+was ticked on the strength of a check that never ran. It runs now.
+
 - [x] Inject a known fault and assert it is detected
-- [x] Assert the correct process is attributed
+- [x] Assert the correct process is attributed — **now actually enforced**;
+      previously printed and ignored, which is how a failing run scored PASS
 - [x] Measure the false-positive rate at rest
 - [x] **Assert the ranking names the injected cause** — `cpu_pct` first at 1.000
-- [ ] Memory fault — bounded now, but not run here: this machine had 0.3 GB
-      free of 15.7 GB, and a memory hog would have forced the session into swap
+- [x] Memory fault — run at 1.15 GB held for 30 minutes, bounded deliberately
+- [ ] **Re-run memory end to end with attribution fixed.** The fix is verified
+      against the stored window, which is not the same as a fresh live pass
+- [ ] Explain why `mem_pct` did not flag at 93% memory use, when
+      `swap_used_delta` did
 - [ ] Track causal yield across many incidents rather than one
 - [ ] Repeat on a second machine — every number here is from one host
 - [ ] Test a fault whose cause is *not* the top-ranked metric. **Both passing
