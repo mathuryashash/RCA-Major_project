@@ -136,6 +136,15 @@ def main(argv: list[str] | None = None) -> int:
     if not acquire_singleton():
         print("Another collector is already running; this instance will exit.", file=sys.stderr)
         return 0
+    # The collector is the only packaged process guaranteed to run, so it is
+    # what keeps the application findable by name after a rebuild removes the
+    # shortcut's target. Never fatal: failing to be searchable must not stop
+    # collection.
+    try:
+        schedule.heal_start_menu_shortcut()
+    except Exception:                       # noqa: BLE001 - cosmetic, never fatal
+        pass
+
     capture_messages = args.capture_messages or store.get_meta(conn, "capture_messages", "0") == "1"
     Collector(conn, capture_messages=capture_messages).run_forever()
     return 0

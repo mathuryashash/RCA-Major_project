@@ -222,3 +222,31 @@ def test_source_checkout_registers_no_supervisor(tmp_path, monkeypatch):
     wrapper = (tmp_path / "Startup" / "rca-collector.cmd").read_text()
     assert "supervise.ps1" not in wrapper
     assert "telemetry_launcher.py" in wrapper
+
+
+def test_collector_restores_a_missing_start_menu_shortcut(tmp_path, monkeypatch):
+    """The GUI cannot be what repairs the shortcut: the shortcut launches it.
+
+    Measured on this machine, both the shortcut and the logon entry were gone
+    while the collector was still running, leaving the application installed,
+    collecting, and unfindable by name with nothing able to put it back.
+    """
+    created = []
+    monkeypatch.setattr(schedule, "desktop_executable", lambda: tmp_path / "RCA-Desktop.exe")
+    monkeypatch.setattr(schedule, "start_menu_shortcut_exists", lambda: bool(created))
+    monkeypatch.setattr(schedule, "create_start_menu_shortcut",
+                        lambda: (created.append(1), True)[1])
+
+    assert schedule.heal_start_menu_shortcut() is True
+    assert len(created) == 1
+
+    # Idempotent: an existing shortcut is not rewritten on every logon.
+    assert schedule.heal_start_menu_shortcut() is False
+    assert len(created) == 1
+
+
+def test_a_source_checkout_never_advertises_a_shortcut_it_cannot_target(monkeypatch):
+    monkeypatch.setattr(schedule, "desktop_executable", lambda: None)
+    monkeypatch.setattr(schedule, "start_menu_shortcut_exists", lambda: False)
+
+    assert schedule.heal_start_menu_shortcut() is False

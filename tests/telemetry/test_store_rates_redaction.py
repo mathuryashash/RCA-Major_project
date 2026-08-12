@@ -141,6 +141,28 @@ def test_gpu_sampling_returns_nulls_without_nvml(monkeypatch):
     }
 
 
+class _Exploding:
+    """A process whose attributes cannot be read at all."""
+
+    pid = 4242
+
+    def as_dict(self, attrs):
+        raise MemoryError("proc_info failed")
+
+
+class _Fine:
+    pid = 7
+
+    def as_dict(self, attrs):
+        return {
+            "name": "ok.exe",
+            "create_time": 2.0,
+            "cpu_times": type("T", (), {"user": 1.0, "system": 0.5})(),
+            "memory_info": type("M", (), {"rss": 100})(),
+            "io_counters": None,
+        }
+
+
 def test_process_sampling_survives_a_non_psutil_exception(monkeypatch):
     """psutil's Windows backend raises MemoryError, not psutil.Error.
 
@@ -150,30 +172,45 @@ def test_process_sampling_survives_a_non_psutil_exception(monkeypatch):
     """
     from telemetry import sampler
 
-    class _Exploding:
-        pid = 4242
-        info = {"name": "bad.exe", "create_time": 1.0}
-
-        def __getattr__(self, name):
-            raise MemoryError("proc_info failed")
-
-    class _Fine:
-        pid = 7
-        info = {
-            "name": "ok.exe",
-            "create_time": 2.0,
-            "cpu_times": type("T", (), {"user": 1.0, "system": 0.5})(),
-            "memory_info": type("M", (), {"rss": 100})(),
-            "io_counters": None,
-        }
-
-    def fake_iter(attrs):
-        return [_Exploding(), _Fine()]
-
-    monkeypatch.setattr(sampler.psutil, "process_iter", fake_iter)
+    monkeypatch.setattr(sampler.psutil, "process_iter",
+                        lambda *a, **k: iter([_Exploding(), _Fine()]))
 
     s = sampler.ProcessSampler()
     s.sample(top_n=5, elapsed_s=None)          # establish a baseline
     rows = s.sample(top_n=5, elapsed_s=30.0)   # must not raise
+    assert [row["name"] for row in rows] == ["ok.exe"]
 
+
+def test_process_sampling_survives_a_failure_raised_by_the_iterator(monkeypatch):
+    """The real crash came from the `for` statement, not the loop body.
+
+    psutil.process_iter(attrs=[...]) calls as_dict() *inside the generator*,
+    so an unreadable process raises before any `except` in the body can see
+    it. The previous test faked a list and could never reproduce that, which
+    is why it passed while the packaged collector died with MemoryError at
+    telemetry/sampler.py line 199 -- taking the already-collected system
+    sample down with it.
+    """
+    from telemetry import sampler
+
+    calls = []
+
+    def recording_iter(*args, **kwargs):
+        calls.append((args, kwargs))
+        # Reproduce the eager form: asking for attrs makes psutil read every
+        # process from inside the generator, which is where it exploded.
+        if args or kwargs:
+            raise MemoryError("proc_info failed inside process_iter")
+        return iter([_Exploding(), _Fine()])
+
+    monkeypatch.setattr(sampler.psutil, "process_iter", recording_iter)
+
+    s = sampler.ProcessSampler()
+    s.sample(top_n=5, elapsed_s=None)
+    rows = s.sample(top_n=5, elapsed_s=30.0)
+
+    assert calls, "process_iter was never called"
+    assert all(not args and not kwargs for args, kwargs in calls), (
+        "process_iter must be called bare so as_dict() runs inside the guard"
+    )
     assert [row["name"] for row in rows] == ["ok.exe"]

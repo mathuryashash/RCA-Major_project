@@ -102,3 +102,40 @@ def test_durations_read_naturally():
     assert engine.format_duration(45) == "~45 seconds"
     assert "minute" in engine.format_duration(600)
     assert "hour" in engine.format_duration(9000)
+
+
+def test_ranking_without_a_surviving_edge_is_not_labelled_critical():
+    """A severity ranking must not wear a band that reads as causal certainty.
+
+    Measured on an injected disk fault: one pair passed FDR and the effect
+    floor, the subsystem map pruned it, the graph emptied -- and the top
+    metric was still presented as "Critical" at 1.000. With no edges, outflow
+    is 0 and inflow is 1 for every node, so 60% of the weight is constant and
+    the score is severity and timing wearing a causal label.
+    """
+    import networkx as nx
+    import pandas as pd
+
+    from causal_inference.causal_engine import RootCauseRanker
+
+    graph = nx.DiGraph()
+    graph.add_node("disk_write_bps", anomaly_score=1.0)
+    graph.add_node("net_sent_bps", anomaly_score=0.4)
+    first_seen = {
+        "disk_write_bps": pd.Timestamp("2026-08-12 09:41", tz="UTC"),
+        "net_sent_bps": pd.Timestamp("2026-08-12 09:55", tz="UTC"),
+    }
+
+    ranked = RootCauseRanker().rank(
+        graph, {"disk_write_bps": 1.0, "net_sent_bps": 0.4}, first_seen,
+    )
+
+    assert ranked[0]["metric"] == "disk_write_bps"      # severity order stands
+    assert all(rc["confidence"] == "Correlation only" for rc in ranked)
+
+    # One edge is enough to earn a real band back.
+    graph.add_edge("disk_write_bps", "net_sent_bps", strength=0.5, p_value=0.01, lag=1)
+    with_edge = RootCauseRanker().rank(
+        graph, {"disk_write_bps": 1.0, "net_sent_bps": 0.4}, first_seen,
+    )
+    assert with_edge[0]["confidence"] != "Correlation only"

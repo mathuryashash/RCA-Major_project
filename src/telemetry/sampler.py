@@ -196,9 +196,19 @@ class ProcessSampler:
         current: dict[tuple[int, float], tuple[float, int, int]] = {}
         rows: list[dict[str, object]] = []
         has_baseline = bool(self._previous)
-        for process in psutil.process_iter(["name", "create_time", "cpu_times", "memory_info", "io_counters"]):
+        # Iterate bare and query inside the guard. process_iter(attrs=...)
+        # calls as_dict() *inside the generator*, so a process that cannot be
+        # read raises from the `for` statement itself, where no `except` in
+        # the body can catch it. Measured: psutil raised MemoryError out of
+        # _psutil_windows.proc_info while the machine was near-full, the
+        # traceback pointed at process_iter, and the whole tick died -- losing
+        # the system sample too, which had already succeeded.
+        for process in psutil.process_iter():
             try:
-                info, times, memory = process.info, process.info["cpu_times"], process.info["memory_info"]
+                info = process.as_dict(
+                    ["name", "create_time", "cpu_times", "memory_info", "io_counters"]
+                )
+                times, memory = info["cpu_times"], info["memory_info"]
                 if times is None or memory is None or info["create_time"] is None:
                     continue
                 key = (process.pid, info["create_time"])

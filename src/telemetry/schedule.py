@@ -185,6 +185,39 @@ def start_menu_shortcut_exists() -> bool:
     return _start_menu_shortcut().exists()
 
 
+def heal_start_menu_shortcut() -> bool:
+    """Recreate the Start menu shortcut if something removed it.
+
+    Windows deletes shortcuts whose target has gone, as part of its own
+    maintenance, and replacing the executable -- a rebuild, or extracting a
+    new release over an old one -- removes the target for long enough to
+    qualify. The desktop application already repairs this at launch, but that
+    is circular: the shortcut is *how* the application gets launched, so once
+    it disappears there is nothing left to trigger the repair. Measured on
+    this machine, both the shortcut and the logon entry were gone while the
+    collector was still running.
+
+    The collector is the right place for it. It is packaged, it starts at
+    logon, and it knows where the GUI lives, so a missing shortcut is back
+    within one session without the user finding the executable by hand.
+
+    Only the shortcut. Not the logon entry: `unregister` deliberately removes
+    that without stopping the collector, and putting it back would overrule
+    the user. `uninstall` removes the shortcut *and* stops the collector, so
+    there is no running process left to resurrect it.
+
+    Returns True when a shortcut was actually restored.
+    """
+    if start_menu_shortcut_exists():
+        return False
+    # create_start_menu_shortcut() already refuses when there is no packaged
+    # GUI to point at, so a source checkout needs no separate guard here.
+    created = create_start_menu_shortcut()
+    if created:
+        _LOGGER.info("Start menu shortcut was missing; recreated it.")
+    return created
+
+
 def remove_start_menu_shortcut() -> bool:
     try:
         _start_menu_shortcut().unlink(missing_ok=True)

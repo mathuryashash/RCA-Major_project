@@ -386,6 +386,15 @@ class RootCauseRanker:
         max_out = max(out_degrees.values()) if out_degrees else 1
         max_in  = max(in_degrees.values())  if in_degrees  else 1
 
+        # With no edges every node has outflow 0 and inflow 1, so 60% of the
+        # weight is a constant and the composite collapses onto severity and
+        # timing alone. Measured on an injected disk fault: the graph emptied,
+        # disk_write_bps scored 1.000 and was labelled "Critical" purely for
+        # being the loudest metric. The number is still worth showing -- it
+        # ranks by severity, which is real -- but a band that reads as causal
+        # certainty is not, so the labels say what the score actually rests on.
+        has_causal_evidence = causal_graph.number_of_edges() > 0
+
         for metric in causal_graph.nodes:
             s: Dict[str, float] = {}
 
@@ -420,7 +429,7 @@ class RootCauseRanker:
             composite = round(min(composite, 1.0), 6)
 
             # Determine confidence label
-            confidence = self._confidence_label(composite)
+            confidence = self._confidence_label(composite, has_causal_evidence)
 
             # Downstream effects (direct successors in causal graph)
             downstream = list(causal_graph.successors(metric))
@@ -448,7 +457,12 @@ class RootCauseRanker:
         return candidates
 
     @staticmethod
-    def _confidence_label(score: float) -> str:
+    def _confidence_label(score: float, has_causal_evidence: bool = True) -> str:
+        if not has_causal_evidence:
+            # No edge survived, so nothing here was shown to cause anything.
+            # Ranking by severity is still useful; calling it "Critical" is a
+            # claim the evidence does not support at any score.
+            return "Correlation only"
         if score >= 0.95:
             return "Critical"
         elif score >= 0.85:
