@@ -858,9 +858,10 @@ PyInstaller `--onedir`, two executables, unsigned.
 
 | Property | Value |
 |---|---|
-| Installed size | 1,110 MB (from 1,538 MB) |
-| Release ZIP | 433.5 MB |
-| SHA256 | `AE73A5A5175507B2A4FC4E5069181B6D8DAAFFED6A52A2D1EC3CAE66D029FA45` |
+| Version | 1.2.0 |
+| Installed size | 1,109 MB (from 1,538 MB) |
+| Release ZIP | 433.3 MB |
+| SHA256 | `2B26D8485FC5D0EF2C4F982CF0D793989ABDA39141FF9BA3AF0B9CF10469F1D4` |
 | Install | extract → run → agree |
 
 Registration is per-user and needs no elevation: a Startup-folder logon entry,
