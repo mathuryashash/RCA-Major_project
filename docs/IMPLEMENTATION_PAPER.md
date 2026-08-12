@@ -2,7 +2,7 @@
 
 **An implementation paper**
 
-Version 1.2.0 · revised 2026-08-12
+Version 1.2.1 · revised 2026-08-12
 
 ---
 
@@ -890,11 +890,16 @@ PyInstaller `--onedir`, two executables, unsigned.
 
 | Property | Value |
 |---|---|
-| Version | 1.2.0 |
+| Version | 1.2.1 |
 | Installed size | 1,109 MB (from 1,538 MB) |
 | Release ZIP | 433.3 MB |
-| SHA256 | `2B26D8485FC5D0EF2C4F982CF0D793989ABDA39141FF9BA3AF0B9CF10469F1D4` |
+| SHA256 | `02FDC5542541051F22BA5E2FF79B648F57F46659BFAD0B841BAA6A07AD0DC1FF` |
 | Install | extract → run → agree |
+
+1.2.0 was built and verified, then superseded before release by the ordering
+fix in §8.4. Its ZIP was deleted rather than kept: an artifact whose checksum
+appears in a document, but whose code has since moved, is the kind of thing
+someone later trusts by mistake.
 
 Registration is per-user and needs no elevation: a Startup-folder logon entry,
 a Start menu shortcut (so Windows search can find the app), and an
