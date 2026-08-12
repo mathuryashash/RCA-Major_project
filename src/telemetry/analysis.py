@@ -173,7 +173,21 @@ def load_process_attribution(
         frame.nlargest(half, "avg_cpu_pct"),
         frame.nlargest(half, "max_rss_bytes"),
     ]).drop_duplicates(subset="name")
-    return (ranked.sort_values("avg_cpu_pct", ascending=False)
+
+    # Order by whichever dimension the process actually stands out in, not by
+    # CPU. Selecting on both and then sorting on one still buries the answer:
+    # measured on the second memory injection, the process holding 1,135 MB
+    # was correctly included and printed tenth of ten, below nine innocents,
+    # because its CPU was 0.0002%. Scoring each row by its share of the
+    # window's maximum in *either* dimension puts the outlier on top whichever
+    # kind of incident this is.
+    prominence = pd.concat([
+        ranked["avg_cpu_pct"] / (ranked["avg_cpu_pct"].max() or 1),
+        ranked["max_rss_bytes"] / (ranked["max_rss_bytes"].max() or 1),
+    ], axis=1).max(axis=1)
+    return (ranked.assign(_prominence=prominence)
+                  .sort_values("_prominence", ascending=False)
+                  .drop(columns="_prominence")
                   .head(limit)
                   .reset_index(drop=True))
 

@@ -20,7 +20,7 @@ measurements contradict the design's assumptions. It is written from
 instrumented runs on a live installation, not from intended behaviour.
 
 The revision of 2026-08-12 adds the first **fault-injection evaluation**, which
-the original draft listed as the single most important missing piece. Five
+the original draft listed as the single most important missing piece. Six
 controlled runs are reported. A 30-minute CPU burn was detected, correctly
 attributed, and — for the first time in this project — **correctly explained**:
 the ranking named `cpu_pct` first with six surviving causal edges pointing away
@@ -29,7 +29,8 @@ from CPU. A 30-minute disk burn was detected and correctly ranked but produced
 topology constraint rather than a statistical one. A 30-minute memory hold was
 detected and then **attributed to four processes that had nothing to do with
 it**, exposing a defect that made memory-bound causes unnameable by
-construction. A 30-minute idle run flagged 1 metric of 29.
+construction; re-run after the fix, the same fault was attributed correctly. A
+30-minute idle run flagged 1 metric of 29.
 
 Several of the most useful results remain negative, and they are reported as
 such. The causal layer is now known to have been *starved* rather than broken —
@@ -685,6 +686,7 @@ of minutes, because it must wait for real samples at the real cadence.
 | CPU burn, 30 min | 60 | 6 of 29 | 10 | **6** | yes | **PASS, explained** |
 | Disk burn, 30 min | 60 | 4 of 29 | 1 | **0 (pruned)** | yes | PASS, unexplained |
 | Memory hold, 30 min | 60 | 2 of 29 | 0 | 0 | **no** | **FAIL — wrong culprit** |
+| Memory hold, 30 min (after fix) | 60 | 3 of 29 | 0 | 0 | yes | PASS, unexplained |
 | Idle, 30 min | 60 | 1 of 29 | — | — | — | 3.4% false positive |
 
 Each run found something the previous ones could not. Read in order they
@@ -799,13 +801,40 @@ disk faults are both CPU-and-I/O-heavy, so they attributed correctly and
 concealed it. And the defect was found only because the fault type was chosen
 for being *different in kind*, not for being likely to pass.
 
-That `mem_pct` did not flag is a second, unresolved observation. The injection
-moved total memory use by roughly 9 percentage points; the autoencoder found
-that unremarkable, while it did flag the swap movement that followed. The most
-likely explanation is that this machine's baseline already spans a wide range of
-memory pressure, so 93% is within learned normal — which would mean the model is
-correct and the fault simply was not large enough to be abnormal *for this host*.
-That is a hypothesis, not a finding; it has not been tested.
+**Re-run live, the fix holds — and exposed a second, milder version of itself.**
+A fresh 30-minute injection of 0.78 GB was detected and attributed: the harness
+reported `ATTRIBUTED to us: yes` under its newly-enforced gate, and the process
+holding **1,135 MB** appeared in the table where before it could not. But it
+appeared *tenth of ten*, below nine innocent processes, because selection now
+used both dimensions while the ordering still used CPU alone — and its CPU was
+0.0002%. Naming the culprit in last place is most of a fix rather than a fix.
+
+Ordering now scores each process by its share of the window's maximum in
+*either* dimension, and sorts on that:
+
+$$\text{prominence}(p) = \max\!\left(
+\frac{\overline{\text{cpu}}_p}{\max_q \overline{\text{cpu}}_q},\;
+\frac{\text{rss}_p}{\max_q \text{rss}_q}\right)$$
+
+Measured against both stored windows: on the memory incident the 1,135 MB
+process moves from tenth to second, and on the CPU incident the busiest process
+still leads on CPU as before. The rule needs no knowledge of which metrics were
+anomalous, which is why it is a sort and not a branch.
+
+That `mem_pct` did not flag is a second, unresolved observation, and the re-run
+**reproduced it**. Both injections moved total memory use substantially — 9
+points in the first, 5 in the second — and in both the autoencoder found that
+unremarkable while flagging the swap movement that followed. Twice is a pattern
+rather than an accident, so the reading that this host's baseline already spans
+a wide range of memory pressure, leaving 93% inside learned normal, is now
+better supported. It remains a hypothesis: nothing has tested it directly, and
+the alternative — that memory features are under-weighted somewhere in scaling
+or thresholding — has not been ruled out.
+
+In both runs the detection that *did* fire came from `swap_used_delta`, a
+derived rate, rather than from the level metric a person would look at. If the
+level metric is systematically insensitive on hosts that habitually run near
+full, that is a real gap for the machines most likely to need this tool.
 
 ### 8.5 Idle: the false-positive floor
 
@@ -823,26 +852,29 @@ real OS activity.
 
 ### 8.6 What this evaluation still does not establish
 
-Five runs on **one machine**. The following remain undone and are not claimed:
+Six runs on **one machine**. The following remain undone and are not claimed:
 
 - **A fault whose cause is not the loudest metric.** Both explaining runs put
   the injected metric at the top of a severity ranking. Neither could have
   distinguished a correct causal answer from a correct *severity* answer.
 - **Repeats on other hardware.** Every number here is from one host.
 - **Causal yield across many incidents**, rather than the two reported here.
-- **Re-running memory with attribution fixed.** The fix is verified against the
-  recorded window, which is not the same as a fresh end-to-end pass.
-- **Why `mem_pct` did not flag** at 93% memory use.
+- **Why `mem_pct` does not flag** under a memory injection, reproduced twice,
+  while `swap_used_delta` does.
+- **Whether the prominence ordering is right when both dimensions are loaded.**
+  It was measured on incidents dominated by one or the other.
 
 The honest claim is **"demonstrated once"**, not "validated".
 
 ### 8.7 What the harness is actually for
 
-The evaluation's most valuable output has not been a pass. Of five runs, one
+The evaluation's most valuable output has not been a pass. Of six runs, one
 explained a fault end to end, one showed the causal layer being starved rather
 than broken, one caught the report blaming statistics for a topology decision,
-and one caught a production defect that made an entire class of root cause
-unnameable — plus a defect in the harness's own scoring.
+one caught a production defect that made an entire class of root cause
+unnameable — plus a defect in the harness's own scoring — and the re-run of
+that last fault caught the *fix* being incomplete, since a culprit named tenth
+of ten is not much use to whoever is reading.
 
 The pattern is consistent enough to state as a working rule: **the runs that
 found defects were the ones chosen for being different in kind from the runs
@@ -959,7 +991,7 @@ at 2 GB.
 1. **Collection coverage of 27.8%** with a median segment of 17 samples —
    exactly the Granger floor. Everything downstream inherits this. The figure
    predates supervision and has not been re-measured.
-2. **Evaluation is five runs on one machine.** No fault has been tested whose
+2. **Evaluation is six runs on one machine.** No fault has been tested whose
    cause is not also the most severe metric, so a correct causal answer and a
    correct severity answer are not yet distinguishable.
 3. **Causal inference frequently produces no edge** at the window sizes real
@@ -1004,10 +1036,11 @@ and disk faults are both CPU-heavy and attributed correctly by accident of
 their shape. The harness scored that run PASS, which was a second defect, and
 the checklist had been claiming attribution was verified on the strength of it.
 
-The lesson generalises past this project. Four of the five runs were chosen to
-be unlike their predecessors, and those are the four that found something. A
-test suite that only exercises the shape of fault it was designed against
-measures its own assumptions.
+The lesson generalises past this project. Four runs were chosen to be unlike
+their predecessors — a wider window, a different subsystem, a fault with no CPU
+signature, and a repeat after a fix — and those four are the ones that found
+something. A test suite that only exercises the shape of fault it was designed
+against measures its own assumptions.
 
 One success is not a measurement. The remaining work is not a better model: it
 is collector supervision measured over a fresh multi-day window, a fault whose
@@ -1068,10 +1101,15 @@ training run on the host machine.
 - The attribution fix is verified by **re-running the analysis over the stored
   incident window**, not by a fresh injection. Nothing here shows it holding
   end to end on a live fault.
-- Two of the five runs were scored by a harness now known to have been
-  **passing runs that failed attribution**. Their detection results stand;
+- Every run before the memory re-run was scored by a harness now known to have
+  been **passing runs that failed attribution**. Their detection results stand;
   their attribution results were re-checked by hand rather than by the harness
   that originally reported them.
+- The harness's attribution check matches any process whose name contains
+  "python", and the development machine runs several. In the re-run the match
+  was confirmed by hand to be the injecting worker, at 1,135 MB against 618 MB
+  for the next largest — but the check as written is **weaker than the result
+  it reported**.
 - The idle false-positive rate was measured on a machine running Windows
   Search indexing. A quieter host would likely score lower, and a busier one
   higher.

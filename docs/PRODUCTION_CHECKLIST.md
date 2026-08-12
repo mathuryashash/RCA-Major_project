@@ -101,10 +101,18 @@ was ticked on the strength of a check that never ran. It runs now.
 - [x] Measure the false-positive rate at rest
 - [x] **Assert the ranking names the injected cause** — `cpu_pct` first at 1.000
 - [x] Memory fault — run at 1.15 GB held for 30 minutes, bounded deliberately
-- [ ] **Re-run memory end to end with attribution fixed.** The fix is verified
-      against the stored window, which is not the same as a fresh live pass
-- [ ] Explain why `mem_pct` did not flag at 93% memory use, when
-      `swap_used_delta` did
+- [x] **Re-run memory end to end with attribution fixed** — fresh 30-minute
+      injection of 0.78 GB, detected and attributed, `ATTRIBUTED to us: yes`
+      under the newly-enforced gate. The re-run also caught the fix being
+      incomplete: the culprit was named *tenth of ten* because ordering still
+      used CPU. Processes are now ranked by their share of the window maximum
+      in either dimension, which moves it to second
+- [ ] Explain why `mem_pct` does not flag under a memory injection —
+      **reproduced twice now**, while `swap_used_delta` fires both times.
+      Either this host's baseline spans wide memory pressure, or memory
+      features are under-weighted in scaling or thresholding
+- [ ] Tighten the harness's attribution check — it matches any process named
+      "python", and this machine runs several
 - [ ] Track causal yield across many incidents rather than one
 - [ ] Repeat on a second machine — every number here is from one host
 - [ ] Test a fault whose cause is *not* the top-ranked metric. **Both passing
