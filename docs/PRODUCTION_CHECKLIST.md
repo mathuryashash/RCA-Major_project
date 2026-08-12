@@ -39,6 +39,7 @@ pipeline saw. **First measured results on this machine:**
 |---|---|---|---|---|
 | CPU burn, 7 min | 14 | 6 of 29, correct metrics present | **never tested** — below the Granger floor | PASS (detection only) |
 | CPU burn, 30 min | 60 | 6 of 29 | **6 edges survived** of 10 significant pairs | **PASS** |
+| Disk burn, 30 min | 60 | 4 of 29 | 1 pair accepted, **pruned by topology** | PASS, unexplained |
 | Idle, 30 min | 60 | 1 of 29 (`mem_available_mb`) | no chain | 3.4% false positives |
 
 **The 30-minute run is the one that settles it.** We caused a CPU burn, and
@@ -63,6 +64,23 @@ Same fault and same code at 7 and 30 minutes, differing only in duration:
 reported "not tested, window too short" at 7 minutes instead of inventing an
 answer, which is the reporting change from earlier doing its job.
 
+**The disk run is the more instructive failure.** Detection passed —
+`disk_write_bps` and `disk_busy_pct` flagged, load attributed to `python.exe` —
+and `disk_write_bps` ranked first at 1.000. But the graph was empty. Exactly
+one pair passed both statistical gates:
+
+```
+net_sent_bps → cpu_pct_max_core     p=0.0033   lag=1   strength 0.136
+```
+
+and the subsystem map has no network→CPU path, so it was pruned. With no edges
+the score collapses to severity alone — so the right answer arrived by a route
+the system cannot claim as causal, and the report says so.
+
+That run also caught a **reporting defect, now fixed**: a topology-pruned pair
+was described as "no edge survived multiple-testing correction", blaming the
+statistics for a decision the map made. The two are now distinguished.
+
 - [x] Inject a known fault and assert it is detected
 - [x] Assert the correct process is attributed
 - [x] Measure the false-positive rate at rest
@@ -71,8 +89,11 @@ answer, which is the reporting change from earlier doing its job.
       free of 15.7 GB, and a memory hog would have forced the session into swap
 - [ ] Track causal yield across many incidents rather than one
 - [ ] Repeat on a second machine — every number here is from one host
-- [ ] Test a fault whose cause is *not* the top-ranked metric, to check the
-      ranking can be wrong in a detectable way
+- [ ] Test a fault whose cause is *not* the top-ranked metric. **Both passing
+      runs put the injected fault at the top of a severity ranking, so nothing
+      here separates a correct causal answer from a correct severity answer**
+- [ ] Decide whether the subsystem map is incomplete (a network→CPU path via
+      interrupt handling is defensible) or the pruned edge was spurious
 
 ### ⚠️ Long-run stability
 

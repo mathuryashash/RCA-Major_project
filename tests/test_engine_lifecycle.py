@@ -198,6 +198,30 @@ def test_evidence_markdown_flags_absence_of_a_causal_chain():
     assert "no causal claim is made" in markdown
 
 
+def test_evidence_markdown_blames_topology_not_the_statistics():
+    """A pair killed by the subsystem map did survive FDR and the effect floor.
+
+    Measured on a disk-fault window: net_sent_bps -> cpu_pct_max_core passed
+    both statistical gates, and the topology map has no network-to-CPU path.
+    Reporting that as "nothing survived correction" misattributes the reason.
+    """
+    results = {
+        "evidence": {
+            "window_start": "a", "window_end": "b", "trigger": "evaluation",
+            "samples_analysed": 60, "anomalous_metrics": 4,
+            "surviving_causal_edges": 0, "correlated_events": 4,
+            "attributed_processes": 5,
+            "causal_pairs_tested": 1, "pairs_pruned_by_topology": 1,
+            "causal_support": "pruned by topology",
+        },
+        "process_attribution": [],
+    }
+    markdown = engine._evidence_markdown(results)
+    assert "subsystem map declares no path" in markdown
+    assert "No causal claim is\nmade" in markdown or "No causal claim is made" in markdown
+    assert "no edge survived multiple-testing correction" not in markdown
+
+
 def test_evidence_markdown_warns_when_model_is_stale():
     results = {
         "evidence": {

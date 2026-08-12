@@ -784,10 +784,19 @@ def run_real_rca(
     tested_pairs = len(results.get("granger_results") or {})
     minimum_for_causality = max_lag * 3 + 2
     too_short = tested_pairs == 0 and len(incident) < minimum_for_causality
+    # An edge can also be lost *after* passing every statistical gate, because
+    # the subsystem topology forbids that direction. Measured: a disk-fault
+    # window accepted net_sent_bps -> cpu_pct_max_core and the map has no
+    # network-to-CPU path, so the graph emptied. Reporting that as "nothing
+    # survived correction" blames the statistics for a decision the topology
+    # made, which is the same overstatement in the opposite direction.
+    pruned_by_topology = max(0, tested_pairs - edges)
     if edges:
         support = "supported"
     elif too_short:
         support = "not tested - window too short"
+    elif pruned_by_topology and tested_pairs:
+        support = "pruned by topology"
     else:
         support = "no supported causal chain"
 
@@ -797,6 +806,7 @@ def run_real_rca(
         "attributed_processes": len(process_attribution),
         "correlated_events": len(results.get("event_correlations", []) or []),
         "causal_pairs_tested": tested_pairs,
+        "pairs_pruned_by_topology": pruned_by_topology,
         "samples_needed_for_causality": minimum_for_causality,
         "causal_support": support,
     })
@@ -847,6 +857,18 @@ def _evidence_markdown(results: Dict) -> str:
             "evidence at all**: with no edges, every metric has equal graph influence "
             "and identical outflow, so the order reflects only which metric deviated "
             "first and by how much. Widen the range or lower the Granger max lag."
+        )
+    elif support == "pruned by topology":
+        lines.append("")
+        lines.append(
+            f"> **No causal chain reported.** "
+            f"{evidence.get('causal_pairs_tested', 0)} pair(s) passed multiple-testing "
+            f"correction and the effect-size floor, and "
+            f"{evidence.get('pairs_pruned_by_topology', 0)} of those were then removed "
+            "because the subsystem map declares no path in that direction. The "
+            "statistics found something the topology does not permit — either the "
+            "relationship is spurious, or the map is incomplete. **No causal claim is "
+            "made**, and the order below reflects timing and severity only."
         )
     elif support == "no supported causal chain":
         lines.append("")
