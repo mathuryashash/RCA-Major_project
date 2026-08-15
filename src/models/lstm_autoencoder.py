@@ -150,7 +150,7 @@ class AnomalyDetector:
                 torch.save(self.model.state_dict(), checkpoint_path)
                 
         # Load best model for calibration
-        self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
+        self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.device, weights_only=True))
         self._calibrate_thresholds(val_data)
         
     def _validate(self, val_data: torch.Tensor, criterion: nn.Module) -> float:

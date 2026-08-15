@@ -214,3 +214,48 @@ def test_process_sampling_survives_a_failure_raised_by_the_iterator(monkeypatch)
         "process_iter must be called bare so as_dict() runs inside the guard"
     )
     assert [row["name"] for row in rows] == ["ok.exe"]
+
+
+def test_a_corrupt_database_is_moved_aside_and_replaced(tmp_path):
+    """An unclean shutdown must not leave the app opening to a traceback."""
+    import sqlite3
+
+    from telemetry import store
+
+    path = tmp_path / "telemetry.db"
+    path.write_bytes(b"this is not a database, it is 40 bytes of junk")
+
+    conn = store.connect(path)                 # must not raise
+    store.init_schema(conn)
+    assert conn.execute("SELECT COUNT(*) FROM samples").fetchone()[0] == 0
+
+    moved = list(tmp_path.glob("telemetry.db.corrupt-*"))
+    assert len(moved) == 1, "the damaged file must be kept, not deleted"
+    assert moved[0].read_bytes().startswith(b"this is not a database")
+
+
+def test_a_locked_database_is_never_quarantined(tmp_path):
+    """The dangerous failure mode: OperationalError subclasses DatabaseError.
+
+    "database is locked" and "file is not a database" arrive as the same
+    exception family. Treating contention as damage would move a healthy
+    database aside whenever the collector held a write lock -- destroying the
+    user's history to fix a crash that was not happening.
+    """
+    import sqlite3
+
+    from telemetry import store
+
+    path = tmp_path / "telemetry.db"
+    good = store.connect(path)
+    store.init_schema(good)
+    good.execute("INSERT INTO meta (key, value) VALUES ('canary', '1')")
+
+    assert store.is_corruption(sqlite3.OperationalError("database is locked")) is False
+    assert store.is_corruption(sqlite3.OperationalError("unable to open database file")) is False
+    assert store.is_corruption(sqlite3.DatabaseError("file is not a database")) is True
+
+    # And the real file survives a reopen while the first handle is still held.
+    store.connect(path)
+    assert not list(tmp_path.glob("*.corrupt-*")), "a live database was quarantined"
+    assert good.execute("SELECT value FROM meta WHERE key='canary'").fetchone()[0] == "1"

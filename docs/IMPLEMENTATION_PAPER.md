@@ -2,7 +2,7 @@
 
 **An implementation paper**
 
-Version 1.2.1 · revised 2026-08-12
+Version 1.2.1 · revised 2026-08-15
 
 ---
 
@@ -135,7 +135,7 @@ rollback journal would block one against the other.
 
 | Table | Contents | Retention |
 |---|---|---|
-| `metrics` | 29 numeric features per 30 s sample | unbounded |
+| `metrics` | 29 numeric features per 30 s sample | **none — see §6.3** |
 | `processes` | top-15 by CPU per scan | 30 days |
 | `events` | allowlisted Windows Event Log records | 365 days |
 | `meta` | schema version, event watermarks, model reference error | — |
@@ -608,14 +608,39 @@ factors grow together.
 |---|---|
 | CPU | 0.78% of total (28 logical cores ≈ 1/5 of one core) |
 | RAM | 27 MB |
-| Database growth | ~2.2 MB/day |
+| Database growth | **3.33 MB/day**, unbounded |
 | Cold first launch | 52 s |
 | Warm launch | 9.5 s |
 
-RAM and disk are comfortable. The CPU figure is higher than a background
-sampler should need and is flagged for a proper profile — the 90-second
-measurement window may have caught a process-sampling burst rather than steady
-state.
+RAM is comfortable. The CPU figure is higher than a background sampler should
+need and is flagged for a proper profile — the 90-second measurement window may
+have caught a process-sampling burst rather than steady state.
+
+**Disk is not comfortable, and the earlier figure in this paper was wrong.**
+Re-measured over a longer span:
+
+| Property | Value |
+|---|---|
+| Span | 18.2 days |
+| `samples` / `proc_samples` / `events` | 21,257 / 515,427 / 4,677 |
+| Database | 60.6 MB |
+| Growth | **3.33 MB/day** |
+
+The previously published 2.2 MB/day was taken over a shorter, quieter window
+and understated the real rate by 51%. Extrapolated, year one is roughly 1.2 GB.
+
+Two design facts make that a trajectory rather than a number. The `samples`
+table has **no retention at all** — `proc_samples` expires at 30 days and
+`events` at 365, but the metric history is kept forever. And there is no
+`VACUUM` and no `auto_vacuum` pragma, so when the 30-day process purge does
+begin to fire it deletes rows into free pages that sqlite reuses internally and
+**never returns to the filesystem**. The file can shrink in content but not in
+size. Neither behaviour has been observed in the wild yet only because this
+installation is younger than the retention window it would trip.
+
+A diagnostic tool that quietly consumes the disk it is diagnosing has a defect
+of the same family as the evaluation harness that could exhaust memory (§10.3):
+correct in intent, unbounded in practice.
 
 ### 6.4 What actually binds
 
@@ -991,6 +1016,66 @@ at 2 GB.
 
 ---
 
+## 10.4 A security and storage audit, including what it got wrong
+
+A full-codebase audit was run against the shipped 1.2.1 build. Its most useful
+output was a finding that **did not survive checking**.
+
+`torch.load` appears four times, loading a model artifact from a user-writable
+directory. That is the textbook Python deserialization vulnerability, and it
+was written up as one. Then it was verified rather than asserted:
+
+```
+torch 2.12.0+cpu
+inspect.signature(torch.load).parameters['weights_only'].default  →  None
+```
+
+In torch ≥ 2.6, `None` resolves to `True`: the restricted unpickler is already
+in force, and the artifact was confirmed to contain only `OrderedDict`, `list`,
+`str`, `int` and `float`, so it loads cleanly under it. **There was no
+vulnerability.** Reporting one would have been a false positive of exactly the
+kind the audit was supposed to filter. The calls now pass `weights_only=True`
+explicitly — which changes nothing today, and prevents a torch downgrade from
+silently turning "load a model file" back into "execute whatever is in it".
+
+The same fate met the SQL finding. One f-string interpolation exists, at
+`analysis.py:214`, and it draws its table name from a hardcoded tuple, so it is
+not injectable. Everything else is parameterised.
+
+What did survive:
+
+- **The storage trajectory** of §6.3 — unbounded `samples`, no vacuum.
+- **`foreground_app`, recorded every 30 seconds and never purged.** 21,247
+  records across 36 applications on the audited machine. This is the most
+  sensitive field the system collects and it receives the *least* protection:
+  the opt-in gate and the redaction pass both apply to Event Log message text,
+  which is optional and expires in a year, while the focus log is on by
+  default, unredactable by nature, and permanent. Combined with
+  `user_idle_sec` it reconstructs when the machine was in use and what it was
+  used for, at 30-second resolution, indefinitely. Nothing is concealed — it is
+  declared in the schema — but the protection is inverted relative to the
+  sensitivity.
+- **An apostrophe in a Windows username breaks collection entirely.** The
+  generated supervisor assigns the collector path into a PowerShell
+  single-quoted string, which ends at the first apostrophe. A user named
+  O'Brien got a script that would not parse, so nothing started at logon and
+  nothing said why. No privilege boundary is crossed, so this is a correctness
+  defect rather than a vulnerability — and it is the same shape as the space in
+  a profile path that broke the original `schtasks` registration.
+- **No corruption handling.** There was not one `sqlite3.Error` handler in the
+  codebase. An unclean shutdown that damaged the database meant the application
+  opened to a traceback with no route back except deleting data by hand.
+
+The corruption fix is worth stating precisely, because the obvious version of
+it destroys data. `sqlite3.OperationalError` — which is what "database is
+locked" raises — is a **subclass** of `sqlite3.DatabaseError`. Catching the
+parent and treating it as damage would move a healthy database aside every time
+the collector held a write lock. The damaged file is now renamed rather than
+deleted, and contention is explicitly excluded from the recovery path, with a
+test that fails if a locked database is ever quarantined.
+
+---
+
 ## 11. Limitations
 
 1. **Collection coverage of 27.8%** with a median segment of 17 samples —
@@ -1005,11 +1090,15 @@ at 2 GB.
    measured discarding the only surviving edge in a run. Whether the map is
    incomplete or the edge was spurious is unresolved.
 5. **`model_stale` conflates** a stale model with an old analysis window.
-6. **Unsigned distribution, 1,110 MB**, with no update mechanism and no path
+6. **Unsigned distribution, 1,109 MB**, with no update mechanism and no path
    for a crash report to reach the developer — the latter arguably
    irreconcilable with the no-egress promise.
-7. **Single-machine scope.** Nothing correlates across machines, by design.
-8. **Untested at non-100% DPI, on small screens, and with a screen reader.**
+7. **Storage grows without bound** at 3.33 MB/day, and purged space is never
+   returned to the filesystem. Unaddressed as of 1.2.1; see §6.3.
+8. **`foreground_app` is retained indefinitely** and is not covered by the
+   opt-in that governs less sensitive data; see §10.4.
+9. **Single-machine scope.** Nothing correlates across machines, by design.
+10. **Untested at non-100% DPI, on small screens, and with a screen reader.**
 
 ---
 

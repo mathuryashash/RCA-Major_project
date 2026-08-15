@@ -1,10 +1,14 @@
 """SQLite persistence for collected telemetry."""
 
 import sqlite3
+import time
 from pathlib import Path
 from typing import Iterable
 
 from . import config
+from .logsetup import get_logger
+
+_LOGGER = get_logger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS samples (
@@ -38,12 +42,91 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
 
+#: Sqlite messages that mean the file itself is unusable, as opposed to merely
+#: busy. Matched on text because sqlite3 raises the same exception class for
+#: both, and telling them apart is the whole point -- see connect().
+_CORRUPTION_MARKERS = (
+    "file is not a database",
+    "database disk image is malformed",
+    "file is encrypted",
+    "malformed database schema",
+)
+
+
+def is_corruption(error: sqlite3.Error) -> bool:
+    """Whether this error means the file is broken rather than contended.
+
+    `sqlite3.OperationalError` -- which is what "database is locked" raises --
+    is a **subclass** of `sqlite3.DatabaseError`. Catching the parent and
+    treating it as corruption would move a perfectly healthy database aside
+    every time the collector happened to hold a write lock, which is a far
+    worse outcome than the crash this is meant to prevent.
+    """
+    if isinstance(error, sqlite3.OperationalError):
+        # "unable to open database file" is permissions or a missing
+        # directory; "database is locked" is contention. Neither is damage.
+        return any(marker in str(error).lower() for marker in _CORRUPTION_MARKERS)
+    return isinstance(error, sqlite3.DatabaseError)
+
+
+def quarantine(path: Path | str) -> Path | None:
+    """Move a damaged database aside and return where it went.
+
+    Deliberately renamed rather than deleted. The file is unreadable to us,
+    but it is still the only copy of the user's history, and a later sqlite
+    build or a recovery tool may get more out of it than we can.
+    """
+    path = Path(path)
+    if not path.exists():
+        return None
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = path.with_name(f"{path.name}.corrupt-{stamp}")
+    try:
+        path.replace(target)
+        # WAL and shared-memory sidecars describe the old file; leaving them
+        # behind would corrupt the replacement on its first open.
+        for suffix in ("-wal", "-shm"):
+            sidecar = path.with_name(path.name + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
+    except OSError:
+        return None
+    _LOGGER.error("Database was unreadable; moved it to %s and started fresh.", target)
+    return target
+
+
 def connect(path: Path | str) -> sqlite3.Connection:
+    """Open the telemetry database, recovering from a corrupted file.
+
+    An unclean shutdown can leave the database unreadable, and every caller
+    routes through here, so this is the one place that can turn "the app
+    opens to a traceback" into "the app starts, says what happened, and keeps
+    collecting". Recovery is one attempt only: if the fresh file is also
+    unreadable the problem is the disk or the directory, and retrying in a
+    loop would just destroy whatever is still there.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        return _open(path)
+    except sqlite3.Error as error:
+        if not is_corruption(error):
+            raise                      # locked, read-only, no such directory
+        if quarantine(path) is None:
+            raise
+        return _open(path)
+
+
+def _open(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), timeout=1.0, isolation_level=None)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.Error:
+        # A corrupt file connects lazily and only fails on first use, so the
+        # connection has to be closed before the file can be moved on Windows.
+        conn.close()
+        raise
     return conn
 
 

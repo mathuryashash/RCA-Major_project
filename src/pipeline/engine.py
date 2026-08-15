@@ -99,7 +99,13 @@ def model_status(model_path: str | Path) -> ModelStatus:
     try:
         import torch
 
-        artifact = torch.load(path, map_location="cpu")
+        # weights_only=True restricts the unpickler to plain data and tensors.
+        # torch 2.6+ already defaults to this, so it changes nothing today --
+        # it is stated explicitly so that running against an older torch
+        # cannot silently turn "load a model file" back into "execute whatever
+        # is in it". Verified: the real artifact holds only OrderedDict, list,
+        # str, int and float, so nothing needs the permissive loader.
+        artifact = torch.load(path, map_location="cpu", weights_only=True)
     except Exception as exc:  # noqa: BLE001 - a corrupt artifact must not crash the UI
         return ModelStatus(exists=False, reason=f"Model artifact could not be read: {exc}")
     if not isinstance(artifact, dict) or "feature_columns" not in artifact:
@@ -294,7 +300,7 @@ def load_model_artifact(model_path: str | Path) -> Tuple[AnomalyDetector, MinMax
     """Load an artifact written by :func:`save_model_artifact`."""
     import torch
 
-    artifact = torch.load(model_path, map_location="cpu")
+    artifact = torch.load(model_path, map_location="cpu", weights_only=True)
     required = {"feature_columns", "window_size", "state_dict", "threshold_per_metric"}
     if not isinstance(artifact, dict) or not required.issubset(artifact):
         raise ValueError("Model artifact is not a supported telemetry model bundle.")
@@ -384,7 +390,7 @@ def train_model(
 
     if skip_train and os.path.exists(model_path):
         import torch
-        checkpoint = torch.load(model_path, map_location="cpu")
+        checkpoint = torch.load(model_path, map_location="cpu", weights_only=True)
         detector.model.load_state_dict(checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint)
         windows = detector.create_windows(normal_scaled.astype(np.float32), stride=5)
         split = int(len(windows) * 0.8)

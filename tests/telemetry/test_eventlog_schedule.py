@@ -250,3 +250,27 @@ def test_a_source_checkout_never_advertises_a_shortcut_it_cannot_target(monkeypa
     monkeypatch.setattr(schedule, "start_menu_shortcut_exists", lambda: False)
 
     assert schedule.heal_start_menu_shortcut() is False
+
+
+def test_supervisor_survives_an_apostrophe_in_the_profile_path(tmp_path, monkeypatch):
+    """PowerShell ends a single-quoted string at the first apostrophe.
+
+    A user named O'Brien produced a supervisor that would not parse, so the
+    collector silently never started at logon -- the same shape of bug as the
+    space in "yashash mathur" that broke the original schtasks registration.
+    """
+    collector = tmp_path / "O'Brien" / "RCA-Collector" / "RCA-Collector.exe"
+    collector.parent.mkdir(parents=True)
+    collector.write_text("x")
+
+    monkeypatch.setattr(schedule.config, "app_dir", lambda: tmp_path / "RCA")
+    monkeypatch.setattr(schedule, "startup_dir", lambda: tmp_path / "Startup")
+    monkeypatch.setattr(schedule, "collector_executable", lambda: collector)
+
+    assert schedule.register() is True
+    script = schedule.supervisor_path().read_text(encoding="utf-8")
+
+    assert "O''Brien" in script, "the apostrophe must be doubled, not passed through"
+    # The assignment must be exactly one balanced single-quoted literal.
+    line = next(l for l in script.splitlines() if l.startswith("$collector ="))
+    assert line.count("'") % 2 == 0, f"unbalanced quoting: {line}"

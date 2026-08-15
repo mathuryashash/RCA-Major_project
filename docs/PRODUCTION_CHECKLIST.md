@@ -138,7 +138,8 @@ Never run unattended for more than ~2 minutes under observation.
 
 **Measured on this machine:** collector at **0.78% of total CPU** (28 logical
 cores — so roughly a fifth of one core), **27 MB RAM**, database growing
-**~2.2 MB/day**.
+**3.33 MB/day** (re-measured over 18.2 days; the earlier 2.2 MB/day figure came
+from a shorter, quieter window and understated the rate by 51%).
 
 RAM and disk are fine. The CPU figure is higher than a background sampler
 should need and deserves a proper look — the 90-second window may have caught
