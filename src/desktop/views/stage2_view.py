@@ -1,7 +1,7 @@
 """Run RCA over a selected window of observed local telemetry."""
 
 import pandas as pd
-from PySide6.QtCore import QDateTime
+from PySide6.QtCore import QDateTime, Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout, QSpinBox,
     QPushButton, QProgressBar, QLabel, QTableWidget, QTableWidgetItem,
@@ -31,6 +31,7 @@ class Stage2View(QWidget):
 
         incident_row = QHBoxLayout()
         self.incident_combo = QComboBox()
+        self.incident_combo.setAccessibleName("Incident to analyse")
         self.incident_combo.addItem(CUSTOM_RANGE, None)
         self.incident_combo.currentIndexChanged.connect(self._on_incident_changed)
         self.refresh_button = QPushButton("Find Incidents")
@@ -40,7 +41,9 @@ class Stage2View(QWidget):
         form.addRow("Detected incident", incident_row)
 
         self.start_edit = QDateTimeEdit(QDateTime.currentDateTime().addSecs(-24 * 3600))
+        self.start_edit.setAccessibleName("Analysis window start")
         self.end_edit = QDateTimeEdit(QDateTime.currentDateTime())
+        self.end_edit.setAccessibleName("Analysis window end")
         for edit in (self.start_edit, self.end_edit):
             edit.setCalendarPopup(True)
             edit.setDisplayFormat("yyyy-MM-dd HH:mm")
@@ -48,6 +51,7 @@ class Stage2View(QWidget):
         form.addRow("Range end", self.end_edit)
 
         self.lag_spin = QSpinBox()
+        self.lag_spin.setAccessibleName("Granger maximum lag")
         self.lag_spin.setRange(2, 10)
         self.lag_spin.setValue(5)
         form.addRow("Granger Max Lag", self.lag_spin)
@@ -77,6 +81,16 @@ class Stage2View(QWidget):
         self.status_label = QLabel("")
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
+        # The verdict, above the tabs, before any number. The evidence section
+        # of the report already decides this; it was simply buried four tabs
+        # deep while the default view showed a table of four-decimal scores
+        # whose own threshold for a meaningful difference is 0.01.
+        self.verdict = QLabel("")
+        self.verdict.setWordWrap(True)
+        self.verdict.setVisible(False)
+        self.verdict.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self.verdict)
+
         self.results_tabs = QTabWidget()
         self.root_cause_table = QTableWidget()
         self.root_cause_table.setColumnCount(6)
@@ -88,6 +102,14 @@ class Stage2View(QWidget):
         header.setStretchLastSection(True)
         self.root_cause_table.verticalHeader().setVisible(False)
         self.root_cause_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.root_cause_table.setAccessibleName("Ranked root cause candidates")
+        # Both figure tabs got an empty state; the tab that opens by default
+        # did not, so before the first run this panel was simply blank.
+        self.root_cause_table.setRowCount(1)
+        self.root_cause_table.setSpan(0, 0, 1, 6)
+        self.root_cause_table.setItem(0, 0, QTableWidgetItem(
+            "Ranked candidates appear here after an analysis."
+        ))
         self.results_tabs.addTab(self.root_cause_table, "Root Causes")
 
         self.graph_view = PlotlyWebView(
@@ -261,6 +283,60 @@ class Stage2View(QWidget):
         self.progress_bar.setValue(pct)
         self.status_label.setText(message)
 
+    def _set_verdict(self, evidence, root_causes):
+        """State the finding once, in words, before any number is shown.
+
+        Reads the same `causal_support` the report's evidence section uses, so
+        the banner and the report cannot disagree -- recomputing the judgement
+        here is how they would drift apart.
+        """
+        support = evidence.get("causal_support")
+        leader = root_causes[0]["metric"] if root_causes else None
+
+        if not root_causes:
+            style, text = "verdictUntested", (
+                "No metric exceeded its anomaly threshold in this window. "
+                "There is nothing to explain, which is a result, not a failure."
+            )
+        elif support == "supported":
+            edges = evidence.get("surviving_causal_edges", 0)
+            style, text = "verdictSupported", (
+                f"Likely root cause: {leader} — supported by {edges} causal "
+                f"edge(s) that survived multiple-testing correction and the "
+                f"effect-size floor."
+            )
+        elif support == "not tested - window too short":
+            needed = evidence.get("samples_needed_for_causality", 0)
+            got = evidence.get("samples_analysed", 0)
+            style, text = "verdictUntested", (
+                f"Causality was not tested. This window holds {got} samples and "
+                f"Granger needs {needed} at this lag, so no pair was compared. "
+                f"{leader} deviated first and hardest, but nothing here is "
+                f"evidence of cause. Widen the range or lower the max lag."
+            )
+        elif support == "pruned by topology":
+            style, text = "verdictCorrelation", (
+                f"No causal claim. Statistically significant links were found and "
+                f"then rejected because the subsystem map allows no path in that "
+                f"direction — so either they were spurious or the map is "
+                f"incomplete. {leader} is the metric that deviated earliest and "
+                f"hardest, not a demonstrated cause."
+            )
+        else:
+            style, text = "verdictCorrelation", (
+                f"Correlation only. No causal edge survived, so {leader} is the "
+                f"metric that deviated earliest and hardest — not a demonstrated "
+                f"cause. The scores below rank severity and timing, nothing more."
+            )
+
+        self.verdict.setObjectName(style)
+        self.verdict.setText(text)
+        self.verdict.setAccessibleName("Analysis verdict")
+        # Qt does not restyle on an objectName change without this.
+        self.verdict.style().unpolish(self.verdict)
+        self.verdict.style().polish(self.verdict)
+        self.verdict.setVisible(True)
+
     def _on_finished(self, payload):
         self._last_payload = payload
         self.state.last_causal_results = payload["causal_results"]
@@ -270,6 +346,10 @@ class Stage2View(QWidget):
         self.state.last_anomaly_times = payload["anomaly_times"]
         self.state.last_report = payload["report"]
         root_causes = payload["root_causes"]
+        self._set_verdict(payload.get("evidence", {}), root_causes)
+        # Clear the placeholder's merged cell before rewriting the table, or
+        # the first row keeps spanning all six columns.
+        self.root_cause_table.clearSpans()
         self.root_cause_table.setRowCount(len(root_causes))
         for row, rc in enumerate(root_causes):
             values = [str(rc["rank"]), rc["metric"], f"{rc['composite_score']:.4f}", rc["confidence"],

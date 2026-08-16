@@ -19,6 +19,10 @@ def _slider_with_spinbox(minimum, maximum, default, layout, label):
     spin = QSpinBox()
     spin.setRange(minimum, maximum)
     spin.setValue(default)
+    # addRow() is given a QLayout, not a widget, so Qt cannot buddy the label
+    # to either control -- both are anonymous to a screen reader without this.
+    slider.setAccessibleName(label)
+    spin.setAccessibleName(label)
     slider.valueChanged.connect(spin.setValue)
     spin.valueChanged.connect(slider.setValue)
     row.addWidget(slider, stretch=3)

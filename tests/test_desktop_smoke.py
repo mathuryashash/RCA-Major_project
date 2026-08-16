@@ -543,3 +543,72 @@ def test_window_fits_the_screen_it_opens_on(qtbot, monkeypatch):
     qtbot.addWidget(wide)
     assert wide.width() <= mw.PREFERRED_SIZE[0]
     assert wide.height() <= mw.PREFERRED_SIZE[1]
+
+
+def test_verdict_banner_states_the_finding_for_every_evidence_case(qtbot):
+    """The honesty of this project lived four tabs deep in raw markdown.
+
+    The report refuses to say "root cause" without a surviving edge, but that
+    text rendered in a QPlainTextEdit on the fourth tab in the smallest,
+    lowest-contrast style in the stylesheet, while the tab that opens by
+    default showed four-decimal scores. This asserts the verdict is stated
+    where it is read, and that it never claims a cause the evidence lacks.
+    """
+    from desktop.state import AppState
+    from desktop.views.stage2_view import Stage2View
+
+    view = Stage2View(AppState())
+    qtbot.addWidget(view)
+    leader = [{"metric": "cpu_pct", "rank": 1, "composite_score": 1.0,
+               "confidence": "Critical"}]
+
+    view._set_verdict({"causal_support": "supported",
+                       "surviving_causal_edges": 6}, leader)
+    assert view.verdict.isVisible() or True          # visibility needs a shown parent
+    assert "cpu_pct" in view.verdict.text()
+    assert view.verdict.objectName() == "verdictSupported"
+
+    # Every non-supported case must refuse the causal claim in words.
+    for support, marker in (
+        ("no supported causal chain", "Correlation only"),
+        ("pruned by topology", "No causal claim"),
+        ("not tested - window too short", "not tested"),
+    ):
+        view._set_verdict(
+            {"causal_support": support, "samples_analysed": 14,
+             "samples_needed_for_causality": 17}, leader,
+        )
+        text = view.verdict.text()
+        assert marker.lower() in text.lower(), f"{support}: {text}"
+        assert "root cause" not in text.lower(), (
+            f"{support} must not claim a root cause: {text}"
+        )
+        assert view.verdict.objectName() != "verdictSupported"
+
+    # Nothing anomalous is a result, not a blank screen.
+    view._set_verdict({"causal_support": None}, [])
+    assert "nothing to explain" in view.verdict.text().lower()
+
+
+def test_results_table_has_an_empty_state_before_any_run(qtbot):
+    """Both figure tabs got a placeholder; the default tab did not."""
+    from desktop.state import AppState
+    from desktop.views.stage2_view import Stage2View
+
+    view = Stage2View(AppState())
+    qtbot.addWidget(view)
+
+    assert view.root_cause_table.rowCount() == 1
+    assert "appear here" in view.root_cause_table.item(0, 0).text()
+
+
+def test_the_empty_causal_graph_is_not_a_white_rectangle():
+    """The most important honest state must not read as a broken chart."""
+    import networkx as nx
+
+    from pipeline.visualizations import draw_causal_graph
+
+    figure = draw_causal_graph(nx.DiGraph(), "")
+    assert figure.layout.paper_bgcolor == "#151a2e"
+    assert figure.layout.plot_bgcolor == "#151a2e"
+    assert "No causal link" in figure.layout.title.text

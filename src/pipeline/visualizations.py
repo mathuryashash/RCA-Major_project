@@ -14,7 +14,23 @@ import plotly.graph_objects as go
 def draw_causal_graph(G: nx.DiGraph, root_cause_metric: str) -> go.Figure:
     """Return a Plotly figure for the causal graph with arrows and legend."""
     if len(G.nodes) == 0:
-        return go.Figure().update_layout(title="No causal edges identified")
+        # Same dark ground as every other figure. Without it Plotly defaults to
+        # white, so the single most important honest state -- "no causal edge
+        # survived" -- rendered as a bright rectangle in a dark application and
+        # read as a broken chart rather than as a finding.
+        return go.Figure().update_layout(
+            title=dict(text="No causal link was established", font=dict(size=16)),
+            annotations=[dict(
+                text=("Either none exists in this data, or the window was too "
+                      "short to test one.<br>The ranking beside this reflects "
+                      "timing and severity only."),
+                showarrow=False, xref="paper", yref="paper", x=0.5, y=0.5,
+                font=dict(size=13, color="#8b949e"), align="center",
+            )],
+            xaxis=dict(visible=False), yaxis=dict(visible=False),
+            paper_bgcolor="#151a2e", plot_bgcolor="#151a2e",
+            font=dict(color="#e2e8f0"),
+        )
 
     try:
         pos = nx.kamada_kawai_layout(G)

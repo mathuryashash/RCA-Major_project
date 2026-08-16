@@ -220,6 +220,49 @@ QLabel#warningBanner {{
 }}
 
 QLabel#errorText {{ color: {DANGER}; }}
+
+/* The verdict of an analysis, stated once at the size it deserves.
+   Before this the finding lived only in the Report tab -- fourth of four, raw
+   markdown, in the smallest and lowest-contrast style in this sheet -- while
+   the tab that opens by default showed four-decimal scores. The application
+   was honest in its report and confident in its interface, and the interface
+   is what gets read. */
+QLabel#verdictSupported, QLabel#verdictCorrelation, QLabel#verdictUntested {{
+    font-size: 16px;
+    font-weight: 600;
+    padding: 12px 14px;
+    border-radius: 8px;
+}}
+QLabel#verdictSupported {{
+    color: {TEXT};
+    background: rgba(45, 212, 191, 0.10);
+    border-left: 4px solid {ACCENT};
+}}
+/* Warning-coloured, not danger-coloured: declining to make a causal claim is
+   correct behaviour, not a fault. */
+QLabel#verdictCorrelation {{
+    color: {TEXT};
+    background: rgba(245, 158, 11, 0.10);
+    border-left: 4px solid {WARNING};
+}}
+QLabel#verdictUntested {{
+    color: {TEXT};
+    background: rgba(139, 148, 158, 0.10);
+    border-left: 4px solid {TEXT_MUTED};
+}}
+
+/* Every button carried a stylesheet background, which stops Qt drawing the
+   native focus rectangle -- so Tab moved an invisible cursor across Run RCA,
+   Train, Find Incidents and both consent buttons. WCAG 2.4.7 failure. */
+QPushButton:focus {{
+    border: 2px solid {ACCENT};
+    padding: 5px 11px;
+}}
+QPushButton#primaryAction:focus {{
+    border: 2px solid {TEXT};
+}}
+QTabBar::tab:focus {{ border: 2px solid {ACCENT}; }}
+QTableWidget:focus, QPlainTextEdit:focus {{ border: 1px solid {ACCENT}; }}
 """
 
 

@@ -5,4 +5,4 @@ says only "the app", and several builds a day with different behaviour are
 indistinguishable once they leave this machine.
 """
 
-__version__ = "1.2.1"
+__version__ = "1.3.0"

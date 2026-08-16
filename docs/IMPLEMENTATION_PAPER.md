@@ -2,7 +2,7 @@
 
 **An implementation paper**
 
-Version 1.2.1 · revised 2026-08-15
+Version 1.3.0 · revised 2026-08-16
 
 ---
 
@@ -570,6 +570,38 @@ Progress percentages are emitted per stage because causal inference dominates
 the runtime, and without them a long analysis is indistinguishable from a hung
 one — which is precisely how the total outage in §10.1 presented.
 
+### 5.2.1 Where the refusal is shown
+
+A design review of the interface found that **every refusal described below
+lived in the least visible widget in the application**. The report declines to
+say "root cause" without a surviving edge and states outright that an
+unsupported ranking is arbitrary — and that text rendered in a
+`QPlainTextEdit` on the *fourth* of four tabs, as raw unparsed markdown, in the
+smallest and lowest-contrast style in the stylesheet. The tab that opens by
+default showed a table of four-decimal scores whose own threshold for a
+meaningful difference is 0.01.
+
+The system was honest in its report and confident in its interface, and the
+interface is what gets read. Two consequences followed:
+
+- A **verdict banner** now sits above the results tabs and states the finding
+  in a sentence before any number appears. It reads the same `causal_support`
+  value the report's evidence section uses rather than recomputing the
+  judgement, so the two cannot drift apart, and a test asserts that no
+  non-supported case ever contains the phrase "root cause".
+- The empty causal graph had **no `paper_bgcolor`**, so Plotly defaulted to
+  white and the single most important honest state — no surviving edge —
+  rendered as a bright rectangle in a dark application, reading as a broken
+  chart rather than as a finding. It now carries the same dark ground as every
+  other figure and says in words why it is empty.
+
+The same review found that no button in the application drew a keyboard focus
+indicator: the stylesheet sets a `QPushButton` background, which stops Qt
+painting the native focus rectangle, so Tab moved an invisible cursor across
+Run RCA, Train, Find Incidents and both consent buttons. That is a WCAG 2.4.7
+failure and is now fixed, along with accessible names on the controls that a
+`QFormLayout` could not buddy to their labels.
+
 ### 5.3 What the report refuses to say
 
 Four distinct outcomes are reported differently, and collapsing them was the
@@ -984,7 +1016,7 @@ PyInstaller `--onedir`, two executables, unsigned.
 
 | Property | Value |
 |---|---|
-| Version | 1.2.1 |
+| Version | 1.3.0 |
 | Installed size | 1,109 MB (from 1,538 MB) |
 | Release ZIP | 433.3 MB |
 | SHA256 | `02FDC5542541051F22BA5E2FF79B648F57F46659BFAD0B841BAA6A07AD0DC1FF` |
@@ -1169,7 +1201,11 @@ test that fails if a locked database is ever quarantined.
 8. **The focus record now expires at 30 days**, but no purge has yet run on
    the development machine, so this shares the unobserved status of item 7.
 9. **Single-machine scope.** Nothing correlates across machines, by design.
-10. **Untested at non-100% DPI, on small screens, and with a screen reader.**
+10. **Untested at non-100% DPI and on small screens.** A design review scored
+    the interface 3/10 for accessibility; keyboard focus and accessible names
+    are fixed, but contrast on structural borders (1.28:1 on `BORDER`, 1.17:1
+    on gridlines) still fails WCAG SC 1.4.11, and nothing has been tried with
+    a real screen reader.
 
 ---
 
