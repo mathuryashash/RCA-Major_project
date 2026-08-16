@@ -207,6 +207,84 @@ def purge_events(conn: sqlite3.Connection, older_than_ts: int) -> int:
     return conn.execute("DELETE FROM events WHERE ts < ?", (older_than_ts,)).rowcount
 
 
+def purge_samples(conn: sqlite3.Connection, older_than_ts: int) -> int:
+    """Expire metric history.
+
+    This table had no retention at all while proc_samples expired at 30 days
+    and events at 365, so the largest permanent contributor to the database
+    was the one nobody had bounded. Measured before this existed: 3.33 MB/day
+    with no ceiling, or roughly 1.2 GB in the first year.
+    """
+    return conn.execute("DELETE FROM samples WHERE ts < ?", (older_than_ts,)).rowcount
+
+
+#: Below this there is nothing worth rewriting the database for. 2,000 pages
+#: is about 8 MB at the usual 4 KB page size -- enough that a user would see
+#: the difference, small enough that the daily check almost always skips.
+VACUUM_MIN_FREE_PAGES = 2_000
+
+
+def reclaimable_bytes(conn: sqlite3.Connection) -> int:
+    """Space deleted rows are holding that the filesystem cannot see."""
+    page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+    free_pages = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    return int(page_size) * int(free_pages)
+
+
+def _database_path(conn: sqlite3.Connection) -> Path | None:
+    for _seq, name, filename in conn.execute("PRAGMA database_list"):
+        if name == "main" and filename:
+            return Path(filename)
+    return None
+
+
+def reclaim(conn: sqlite3.Connection) -> int:
+    """Return deleted space to the filesystem, and report how much.
+
+    Deleting rows does not shrink a SQLite file. Freed pages go on an internal
+    free list and are reused for future writes, so without this the retention
+    rules above would delete half a million rows and free zero bytes on disk
+    -- the purge would look like it had done nothing at all.
+
+    Skipped unless there is enough to be worth a full rewrite, and refused
+    outright when the disk cannot hold the temporary copy VACUUM needs. A tool
+    that diagnoses a machine must not be the thing that fills its disk, which
+    is the same rule the evaluation harness had to learn about memory.
+    """
+    free_bytes = reclaimable_bytes(conn)
+    page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+    if free_bytes < VACUUM_MIN_FREE_PAGES * page_size:
+        return 0
+
+    path = _database_path(conn)
+    if path is not None and path.exists():
+        try:
+            import shutil
+
+            # VACUUM builds a complete second copy before swapping it in.
+            # Starting one without room for it is how a cleanup task turns
+            # into the outage it was meant to prevent.
+            needed = path.stat().st_size * 2
+            if shutil.disk_usage(path.parent).free < needed:
+                _LOGGER.warning(
+                    "Skipping VACUUM: needs %.0f MB free, disk has less.",
+                    needed / 1e6,
+                )
+                return 0
+        except OSError:
+            return 0
+
+    try:
+        conn.execute("VACUUM")
+    except sqlite3.Error:
+        # Contention or a read-only file. Nothing is lost -- the space stays
+        # on the free list and the next daily pass will try again.
+        _LOGGER.exception("VACUUM failed; space stays on the free list.")
+        return 0
+    _LOGGER.info("Reclaimed %.1f MB of deleted rows.", free_bytes / 1e6)
+    return free_bytes
+
+
 def record_collection_gap(
     conn: sqlite3.Connection, channel: str, start_ts: int | None,
     end_ts: int | None, detected_at: int,

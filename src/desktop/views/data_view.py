@@ -74,6 +74,7 @@ class DataView(QWidget):
             ("gaps", "Event Log coverage gaps"),
             ("span", "Collecting since"),
             ("size", "Size on disk"),
+            ("retention", "Kept for"),
             ("path", "Database"),
         ):
             self.labels[key] = QLabel("—")
@@ -118,14 +119,14 @@ class DataView(QWidget):
             # Blank the counters too. Leaving them at their last good values is
             # the frozen-numbers symptom this exists to remove.
             for key in ("samples", "proc_samples", "events", "coverage",
-                        "sampling_gaps", "gaps", "span", "size"):
+                        "sampling_gaps", "gaps", "span", "size", "retention"):
                 self.labels[key].setText("—")
             return
 
         if not summary["exists"]:
             self.labels["path"].setText(f"{config.db_path()} — not created yet")
             for key in ("samples", "proc_samples", "events", "coverage",
-                        "sampling_gaps", "gaps", "span", "size"):
+                        "sampling_gaps", "gaps", "span", "size", "retention"):
                 self.labels[key].setText("—")
             self.table.setRowCount(0)
             return
@@ -145,6 +146,13 @@ class DataView(QWidget):
             f"{summary['sampling_gaps']:,} breaks, {summary['gap_hours']:.1f} h not collected"
         )
         self.labels["size"].setText(_human_bytes(summary["size_bytes"]))
+        # Retention is otherwise invisible: the app deletes the user's history
+        # on a schedule and nothing in the interface said so.
+        self.labels["retention"].setText(
+            f"metrics {config.SAMPLE_RETENTION_DAYS} days · "
+            f"process detail {config.PROC_RETENTION_DAYS} days · "
+            f"events {config.EVENT_RETENTION_DAYS} days"
+        )
         self.labels["path"].setText(str(summary["path"]))
         if summary["first_ts"] is not None:
             hours = (summary["last_ts"] - summary["first_ts"]).total_seconds() / 3600

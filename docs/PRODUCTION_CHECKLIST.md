@@ -149,7 +149,16 @@ a process-sampling burst rather than steady state.
 - [ ] Throttle or pause on battery
 - [ ] Add a visible pause control — there is currently no way to stop
       collection short of uninstalling
-- [ ] Cap database growth, or make retention configurable
+- [x] **Cap database growth** — metric history now expires at 365 days
+      (matching the event window, so an Event Log fault always has telemetry
+      left to explain it), and `VACUUM` returns freed space to the filesystem
+- [ ] **Observe a purge actually running.** Measured at the time of the change:
+      71.8 MB, **0.0 MB reclaimable, 0 rows past retention** — the install is
+      21 days old and the shortest window is 30 days, so the live path has
+      never fired. Unit-tested (the test asserts the file on disk halves), not
+      yet seen in production
+- [ ] Make retention user-editable. It is now *shown* in the Captured Data tab
+      but changing it needs settings persistence, which does not exist yet
 
 ### ❌ Update mechanism
 

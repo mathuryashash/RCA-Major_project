@@ -135,7 +135,7 @@ rollback journal would block one against the other.
 
 | Table | Contents | Retention |
 |---|---|---|
-| `metrics` | 29 numeric features per 30 s sample | **none — see §6.3** |
+| `metrics` | 29 numeric features per 30 s sample | 365 days |
 | `processes` | top-15 by CPU per scan | 30 days |
 | `events` | allowlisted Windows Event Log records | 365 days |
 | `meta` | schema version, event watermarks, model reference error | — |
@@ -629,18 +629,56 @@ Re-measured over a longer span:
 The previously published 2.2 MB/day was taken over a shorter, quieter window
 and understated the real rate by 51%. Extrapolated, year one is roughly 1.2 GB.
 
-Two design facts make that a trajectory rather than a number. The `samples`
-table has **no retention at all** — `proc_samples` expires at 30 days and
-`events` at 365, but the metric history is kept forever. And there is no
-`VACUUM` and no `auto_vacuum` pragma, so when the 30-day process purge does
-begin to fire it deletes rows into free pages that sqlite reuses internally and
-**never returns to the filesystem**. The file can shrink in content but not in
-size. Neither behaviour has been observed in the wild yet only because this
-installation is younger than the retention window it would trip.
+Two design facts made that a trajectory rather than a number. The `samples`
+table had **no retention at all** — `proc_samples` expired at 30 days and
+`events` at 365, but the metric history was kept forever. And there was no
+`VACUUM` and no `auto_vacuum` pragma, so when the 30-day process purge began to
+fire it would delete rows into free pages that sqlite reuses internally and
+**never returns to the filesystem**. The file could shrink in content but not
+in size. Neither behaviour had been observed in the wild only because the
+installation was younger than the retention window it would trip.
 
 A diagnostic tool that quietly consumes the disk it is diagnosing has a defect
 of the same family as the evaluation harness that could exhaust memory (§10.3):
 correct in intent, unbounded in practice.
+
+### 6.3.1 What was done about it
+
+Metric history now expires at **365 days**, matching the event window so that
+an incident still visible in the Event Log always has telemetry left to explain
+it. A shorter figure would leave the application listing year-old faults it can
+no longer analyse, which is a worse failure than the disk cost.
+
+Reclamation is the half that makes retention visible, and it is gated twice:
+
+$$\text{vacuum} \iff \text{free pages} \ge 2000 \;\wedge\; \text{disk free} \ge 2 \times \text{db size}$$
+
+The first gate exists because a full rewrite for a few kilobytes is not worth
+the daily churn. The second exists because `VACUUM` builds a complete second
+copy before swapping it in — starting one without room for it is how a cleanup
+task becomes the outage it was meant to prevent, which is the same rule the
+memory-fault harness had to learn in §10.3. A failed or skipped vacuum loses
+nothing: the space stays on the free list and the next daily pass retries.
+
+**This cannot be demonstrated on the development machine, and is not claimed
+to be.** Measured at the time of the change:
+
+| | |
+|---|---|
+| Database | 71.8 MB |
+| Reclaimable right now | **0.0 MB** |
+| Rows past retention | **0 of 24,695 samples, 0 of 612,734 process samples** |
+
+The installation is 21 days old and the shortest retention window is 30 days,
+so no purge has ever fired and there is nothing yet to reclaim. The mechanism
+is covered by a test that fills a database, deletes from it, and asserts the
+**file on disk** shrinks by more than half — which fails if reclamation is
+removed — but the live path first executes around day 30. The honest status is
+*implemented and unit-tested, not yet observed in production*.
+
+Sequencing was deliberate. Corruption recovery (§10.4) landed **before** this,
+because `VACUUM` rewrites the entire database and is the single most
+dangerous routine operation the application performs.
 
 ### 6.4 What actually binds
 
@@ -1093,8 +1131,10 @@ test that fails if a locked database is ever quarantined.
 6. **Unsigned distribution, 1,109 MB**, with no update mechanism and no path
    for a crash report to reach the developer — the latter arguably
    irreconcilable with the no-egress promise.
-7. **Storage grows without bound** at 3.33 MB/day, and purged space is never
-   returned to the filesystem. Unaddressed as of 1.2.1; see §6.3.
+7. **Storage retention is implemented but unobserved.** Metric history now
+   expires at 365 days and freed space is returned to the filesystem, but the
+   installation is younger than the shortest retention window, so no purge has
+   ever run outside a test; see §6.3.1.
 8. **`foreground_app` is retained indefinitely** and is not covered by the
    opt-in that governs less sensitive data; see §10.4.
 9. **Single-machine scope.** Nothing correlates across machines, by design.

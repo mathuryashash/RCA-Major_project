@@ -95,6 +95,11 @@ class Collector:
         self._last_purge_mono = mono_now
         store.purge_proc_samples(self.conn, int(wall_now) - config.PROC_RETENTION_DAYS * 86400)
         store.purge_events(self.conn, int(wall_now) - config.EVENT_RETENTION_DAYS * 86400)
+        store.purge_samples(self.conn, int(wall_now) - config.SAMPLE_RETENTION_DAYS * 86400)
+        # Deleting rows frees pages inside the file, not on the disk. Without
+        # this the retention rules above would remove hundreds of thousands of
+        # rows and the database would not shrink by a single byte.
+        store.reclaim(self.conn)
 
     def run_once(self, now: float | None = None, mono_now: float | None = None) -> None:
         if not consent_granted(self.conn):

@@ -16,6 +16,12 @@ BURST_DISK_BUSY_PCT = 80.0
 TOP_N = 15
 PROC_RETENTION_DAYS = 30
 EVENT_RETENTION_DAYS = 365
+#: Metric history. Chosen to match the event window so an incident found in
+#: the Event Log still has telemetry to explain it -- a shorter figure would
+#: leave the app listing year-old faults it can no longer analyse. At the
+#: measured 3.33 MB/day this bounds the database near 1.2 GB rather than
+#: letting it grow for the life of the machine.
+SAMPLE_RETENTION_DAYS = 365
 EVENT_CHANNELS = ("System", "Application")
 # Only these event families are retained. The collector advances its watermark
 # across every event, but discards all non-allowlisted records before storage.

@@ -259,3 +259,106 @@ def test_a_locked_database_is_never_quarantined(tmp_path):
     store.connect(path)
     assert not list(tmp_path.glob("*.corrupt-*")), "a live database was quarantined"
     assert good.execute("SELECT value FROM meta WHERE key='canary'").fetchone()[0] == "1"
+
+
+def _fill(conn, table, first_ts, count, step=30):
+    """Insert `count` rows of bulk so the database has something to reclaim."""
+    if table == "samples":
+        conn.executemany(
+            "INSERT INTO samples (ts, foreground_app) VALUES (?, ?)",
+            [(first_ts + i * step, "x" * 200) for i in range(count)],
+        )
+    else:
+        conn.executemany(
+            "INSERT INTO proc_samples (ts, pid, create_time, name) VALUES (?, ?, ?, ?)",
+            [(first_ts + i * step, i, 1.0, "y" * 200) for i in range(count)],
+        )
+
+
+def test_metric_history_expires_like_everything_else(tmp_path):
+    """`samples` had no retention while every other table did.
+
+    It was the largest permanent contributor to a database measured growing
+    3.33 MB/day with no ceiling.
+    """
+    from telemetry import store
+
+    conn = store.connect(tmp_path / "t.db")
+    store.init_schema(conn)
+    now = 1_800_000_000
+    _fill(conn, "samples", now - 400 * 86400, 50)      # older than a year
+    _fill(conn, "samples", now - 10 * 86400, 50)       # recent
+
+    removed = store.purge_samples(conn, now - 365 * 86400)
+
+    assert removed == 50
+    assert store.sample_count(conn) == 50, "recent history must survive"
+
+
+def test_vacuum_actually_returns_space_to_the_filesystem(tmp_path):
+    """Deleting rows frees pages inside the file, not on the disk.
+
+    Without VACUUM the retention rules delete hundreds of thousands of rows
+    and the file does not shrink by one byte, so the purge looks like it did
+    nothing. This is the test that would fail if reclaim() were removed.
+    """
+    from telemetry import store
+
+    path = tmp_path / "t.db"
+    conn = store.connect(path)
+    store.init_schema(conn)
+    _fill(conn, "proc_samples", 1_000_000, 40_000)
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    before = path.stat().st_size
+
+    store.purge_proc_samples(conn, 2_000_000)
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    after_delete = path.stat().st_size
+    assert after_delete >= before * 0.9, "deleting alone should not shrink the file"
+    assert store.reclaimable_bytes(conn) > 0
+
+    freed = store.reclaim(conn)
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    after_vacuum = path.stat().st_size
+
+    assert freed > 0
+    assert after_vacuum < after_delete * 0.5, (
+        f"file did not shrink: {after_delete} -> {after_vacuum}"
+    )
+
+
+def test_vacuum_is_skipped_when_there_is_little_to_reclaim(tmp_path):
+    """A full rewrite every day for a few kilobytes is not worth the churn."""
+    from telemetry import store
+
+    conn = store.connect(tmp_path / "t.db")
+    store.init_schema(conn)
+    _fill(conn, "samples", 1_000_000, 20)
+
+    assert store.reclaim(conn) == 0
+
+
+def test_vacuum_refuses_when_the_disk_cannot_hold_the_copy(tmp_path, monkeypatch):
+    """VACUUM builds a complete second copy before swapping it in.
+
+    Starting one without room is how a cleanup task becomes the outage it was
+    meant to prevent -- the same rule the memory fault harness had to learn.
+    """
+    import shutil
+
+    from telemetry import store
+
+    path = tmp_path / "t.db"
+    conn = store.connect(path)
+    store.init_schema(conn)
+    _fill(conn, "proc_samples", 1_000_000, 40_000)
+    store.purge_proc_samples(conn, 2_000_000)
+    assert store.reclaimable_bytes(conn) > 0        # would otherwise vacuum
+
+    monkeypatch.setattr(
+        shutil, "disk_usage",
+        lambda p: type("U", (), {"total": 0, "used": 0, "free": 1024})(),
+    )
+
+    assert store.reclaim(conn) == 0, "must not vacuum onto a full disk"
+    assert store.reclaimable_bytes(conn) > 0, "space stays on the free list"
