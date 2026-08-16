@@ -136,12 +136,18 @@ rollback journal would block one against the other.
 | Table | Contents | Retention |
 |---|---|---|
 | `metrics` | 29 numeric features per 30 s sample | 365 days |
+| `metrics.foreground_app` | the application in focus | 30 days |
 | `processes` | top-15 by CPU per scan | 30 days |
 | `events` | allowlisted Windows Event Log records | 365 days |
 | `meta` | schema version, event watermarks, model reference error | — |
 
-The retention asymmetry is deliberate — process detail is the most sensitive
-data collected — and it is the direct cause of a defect in §10.
+The retention asymmetry is deliberate: windows shorten as data becomes more
+personal. The focus record is the shortest because it describes a person
+rather than the machine (§3.4); process detail is next; the numeric readings,
+which are machine state, are kept longest. This ordering is a correction — the
+original design had the asymmetry backwards, protecting Event Log text while
+the focus log was kept indefinitely — and the 30-day process window is the
+direct cause of a defect in §10.
 
 ### 2.4 Threading
 
@@ -199,6 +205,31 @@ first for user paths, UNC paths, URLs, email addresses and the username.
 Window titles, keystrokes, clipboard and file contents are never captured.
 There is no network code anywhere in the source; the privacy claim is
 structural rather than policy-based.
+
+**The protection was inverted, and has been corrected.** `foreground_app` — the
+name of the application in focus — is sampled every 30 seconds alongside
+`user_idle_sec`. Together they reconstruct when the machine was in use and
+roughly what for, which makes them the most personal data the system holds. Yet
+the two mechanisms the design was proudest of, the opt-in gate and the
+redaction pass, both govern **Event Log message text**: optional, redacted, and
+expiring at 365 days. The focus record was on by default, unredactable by
+nature, and kept forever. Nothing was concealed — it is declared in the schema
+— but the safeguards protected the less sensitive field.
+
+It now expires at **30 days**, matched to the process-sample window because
+both describe behaviour rather than machine state, and it is erased as a
+*column* rather than by deleting the row: the numeric readings beside it are
+machine state and stay for the full window, so coverage, gap detection and
+training are untouched. `foreground_app` is not in `MODELLED_COLUMNS` and never
+was, so the cost is display context on incidents older than a month and no
+accuracy whatsoever — a claim now guarded by a test that fails if either field
+ever enters the model's feature set.
+
+The consent dialog also did not mention it. It listed what is recorded every 30
+seconds and omitted the focus log entirely, which meant the disclosure was
+accurate about the data it protected and silent about the data it did not. It
+now names the field, states plainly what it can reconstruct, and gives every
+retention window.
 
 A consent dialog on first launch states what is recorded before any collection
 begins, and declining collects nothing.
@@ -1135,8 +1166,8 @@ test that fails if a locked database is ever quarantined.
    expires at 365 days and freed space is returned to the filesystem, but the
    installation is younger than the shortest retention window, so no purge has
    ever run outside a test; see §6.3.1.
-8. **`foreground_app` is retained indefinitely** and is not covered by the
-   opt-in that governs less sensitive data; see §10.4.
+8. **The focus record now expires at 30 days**, but no purge has yet run on
+   the development machine, so this shares the unobserved status of item 7.
 9. **Single-machine scope.** Nothing correlates across machines, by design.
 10. **Untested at non-100% DPI, on small screens, and with a screen reader.**
 

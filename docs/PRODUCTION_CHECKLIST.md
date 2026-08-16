@@ -157,6 +157,15 @@ a process-sampling burst rather than steady state.
       21 days old and the shortest window is 30 days, so the live path has
       never fired. Unit-tested (the test asserts the file on disk halves), not
       yet seen in production
+- [x] **Shorten retention on the focus record** — `foreground_app`, sampled
+      every 30 s and paired with `user_idle_sec`, reconstructs when the machine
+      was in use and roughly what for. It was the most personal field collected
+      and had the least protection: on by default, outside the opt-in that
+      governs Event Log text, and kept forever. Now erased at 30 days as a
+      *column*, so the readings beside it survive and nothing the model trains
+      on is touched
+- [x] **Say so in the consent dialog** — it listed what is recorded every 30
+      seconds and omitted the focus log entirely
 - [ ] Make retention user-editable. It is now *shown* in the Captured Data tab
       but changing it needs settings persistence, which does not exist yet
 

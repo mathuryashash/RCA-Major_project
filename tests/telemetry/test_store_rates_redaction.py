@@ -362,3 +362,43 @@ def test_vacuum_refuses_when_the_disk_cannot_hold_the_copy(tmp_path, monkeypatch
 
     assert store.reclaim(conn) == 0, "must not vacuum onto a full disk"
     assert store.reclaimable_bytes(conn) > 0, "space stays on the free list"
+
+
+def test_the_focus_record_expires_before_the_readings_beside_it(tmp_path):
+    """foreground_app describes a person; the metrics beside it describe a machine.
+
+    It had the least protection of anything collected -- on by default, not
+    covered by the opt-in that governs Event Log text, and kept forever --
+    while being the most personal field in the schema. Paired with
+    user_idle_sec it reconstructs when the machine was in use and for what.
+    """
+    from telemetry import config, store
+
+    conn = store.connect(tmp_path / "t.db")
+    store.init_schema(conn)
+    now = 1_800_000_000
+    old, recent = now - 90 * 86400, now - 5 * 86400
+    conn.execute("INSERT INTO samples (ts, cpu_pct, foreground_app) VALUES (?, ?, ?)",
+                 (old, 12.5, "private-app.exe"))
+    conn.execute("INSERT INTO samples (ts, cpu_pct, foreground_app) VALUES (?, ?, ?)",
+                 (recent, 30.0, "recent-app.exe"))
+
+    blanked = store.purge_foreground_app(conn, now - config.FOREGROUND_APP_RETENTION_DAYS * 86400)
+
+    assert blanked == 1
+    rows = dict(conn.execute("SELECT ts, foreground_app FROM samples").fetchall())
+    assert rows[old] is None, "the old focus record must be gone"
+    assert rows[recent] == "recent-app.exe"
+
+    # The row itself survives, so coverage and gap detection are unaffected,
+    # and the metric the model actually trains on is untouched.
+    assert store.sample_count(conn) == 2
+    assert conn.execute("SELECT cpu_pct FROM samples WHERE ts=?", (old,)).fetchone()[0] == 12.5
+
+
+def test_expiring_the_focus_record_touches_nothing_the_model_uses():
+    """Guards the claim that this costs no accuracy."""
+    from telemetry.analysis import MODELLED_COLUMNS
+
+    assert "foreground_app" not in MODELLED_COLUMNS
+    assert "user_idle_sec" not in MODELLED_COLUMNS

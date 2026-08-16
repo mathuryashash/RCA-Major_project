@@ -22,6 +22,16 @@ EVENT_RETENTION_DAYS = 365
 #: measured 3.33 MB/day this bounds the database near 1.2 GB rather than
 #: letting it grow for the life of the machine.
 SAMPLE_RETENTION_DAYS = 365
+#: The foreground application name, erased ahead of the row that carries it.
+#: Paired with user_idle_sec it reconstructs when the machine was in use and
+#: roughly what for, which makes it the most personal field collected and the
+#: one that had the least protection: the opt-in and the redaction pass both
+#: govern Event Log text, which is optional and expires, while this was on by
+#: default and kept forever. Matched to the process-sample window because both
+#: describe behaviour rather than machine state. Nothing in the model uses it
+#: -- it is not in MODELLED_COLUMNS -- so expiring it costs display context
+#: for old incidents and no accuracy at all.
+FOREGROUND_APP_RETENTION_DAYS = 30
 EVENT_CHANNELS = ("System", "Application")
 # Only these event families are retained. The collector advances its watermark
 # across every event, but discards all non-allowlisted records before storage.

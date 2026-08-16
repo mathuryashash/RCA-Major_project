@@ -218,6 +218,22 @@ def purge_samples(conn: sqlite3.Connection, older_than_ts: int) -> int:
     return conn.execute("DELETE FROM samples WHERE ts < ?", (older_than_ts,)).rowcount
 
 
+def purge_foreground_app(conn: sqlite3.Connection, older_than_ts: int) -> int:
+    """Erase the focus record while keeping the readings it sat beside.
+
+    A column, not a row: the numeric metrics on the same sample are machine
+    state and stay for the full window, but the application name is a record
+    of a person and does not need to. Blanking in place keeps the row's
+    timestamp, so coverage, gap detection and the model's feature set are all
+    untouched -- foreground_app is not in MODELLED_COLUMNS and never was.
+    """
+    return conn.execute(
+        "UPDATE samples SET foreground_app = NULL "
+        "WHERE ts < ? AND foreground_app IS NOT NULL",
+        (older_than_ts,),
+    ).rowcount
+
+
 #: Below this there is nothing worth rewriting the database for. 2,000 pages
 #: is about 8 MB at the usual 4 KB page size -- enough that a user would see
 #: the difference, small enough that the daily check almost always skips.

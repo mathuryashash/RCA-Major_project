@@ -16,19 +16,31 @@ DISCLOSURE = f"""
 a problem after it happens.</b></p>
 
 <p><b>What is recorded, every 30 seconds:</b> CPU, memory, disk, network,
-battery and GPU readings. <b>Every 5 minutes:</b> the names of the busiest
-programs, with their CPU, memory and I/O. <b>As they occur:</b> a fixed list
-of Windows Event Log entries — crashes, unexpected shutdowns, disk errors and
-update activity.</p>
+battery and GPU readings, <b>the name of the application you are currently
+using</b>, and how long since you last touched the keyboard or mouse.
+<b>Every 5 minutes:</b> the names of the busiest programs, with their CPU,
+memory and I/O. <b>As they occur:</b> a fixed list of Windows Event Log
+entries — crashes, unexpected shutdowns, disk errors and update activity.</p>
 
-<p><b>What is never recorded:</b> window titles, keystrokes, file contents,
-browsing history, or the text of documents. Event Log message text is stored
-only if you ask for it, and is redacted for paths, usernames, URLs and email
-addresses first.</p>
+<p><b>Be clear about what that means.</b> The application name and the idle
+timer together form a record of when this machine was in use and roughly what
+it was used for. That is the most personal thing collected here, so it is also
+the shortest-lived: it is erased after
+{config.FOREGROUND_APP_RETENTION_DAYS} days, while the numeric readings beside
+it are kept longer.</p>
+
+<p><b>What is never recorded:</b> window titles, page addresses, keystrokes,
+file contents, browsing history, or the text of documents. Knowing a browser
+was in focus does not record which site was open. Event Log message text is
+stored only if you ask for it, and is redacted for paths, usernames, URLs and
+email addresses first.</p>
 
 <p><b>Where it goes:</b> a database on this machine at
 <code>{config.db_path()}</code>. Nothing is uploaded. The application makes no
-network connections. Process samples are kept 30 days and events 365 days.</p>
+network connections. Readings are kept {config.SAMPLE_RETENTION_DAYS} days,
+process samples {config.PROC_RETENTION_DAYS} days, events
+{config.EVENT_RETENTION_DAYS} days, and the application-name record
+{config.FOREGROUND_APP_RETENTION_DAYS} days. Nothing is kept indefinitely.</p>
 
 <p><b>What agreeing sets up:</b> the collector is registered to start at every
 logon, so recording continues while this window is closed — that is what makes

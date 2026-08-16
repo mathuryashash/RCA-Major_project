@@ -151,7 +151,8 @@ class DataView(QWidget):
         self.labels["retention"].setText(
             f"metrics {config.SAMPLE_RETENTION_DAYS} days · "
             f"process detail {config.PROC_RETENTION_DAYS} days · "
-            f"events {config.EVENT_RETENTION_DAYS} days"
+            f"events {config.EVENT_RETENTION_DAYS} days · "
+            f"foreground app {config.FOREGROUND_APP_RETENTION_DAYS} days"
         )
         self.labels["path"].setText(str(summary["path"]))
         if summary["first_ts"] is not None:

@@ -96,6 +96,11 @@ class Collector:
         store.purge_proc_samples(self.conn, int(wall_now) - config.PROC_RETENTION_DAYS * 86400)
         store.purge_events(self.conn, int(wall_now) - config.EVENT_RETENTION_DAYS * 86400)
         store.purge_samples(self.conn, int(wall_now) - config.SAMPLE_RETENTION_DAYS * 86400)
+        # The focus record goes early, ahead of the row carrying it: it
+        # describes a person rather than the machine.
+        store.purge_foreground_app(
+            self.conn, int(wall_now) - config.FOREGROUND_APP_RETENTION_DAYS * 86400
+        )
         # Deleting rows frees pages inside the file, not on the disk. Without
         # this the retention rules above would remove hundreds of thousands of
         # rows and the database would not shrink by a single byte.
