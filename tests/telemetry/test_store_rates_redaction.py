@@ -466,3 +466,38 @@ def test_only_one_damaged_copy_is_kept(tmp_path):
         conn.close()
 
     assert len(store.quarantine_files(path)) == 1
+
+
+def test_vacuum_does_not_rewrite_a_large_file_for_a_small_gain(tmp_path, monkeypatch):
+    """An absolute floor is the wrong shape once the database is large.
+
+    At the measured growth rate a daily purge frees roughly 8 MB, which clears
+    the 2,000-page floor -- so on a 1.2 GB database VACUUM would rewrite the
+    whole file every few days to recover 0.7% of it, which is the exact churn
+    the floor exists to prevent.
+
+    Reaching that window with real data needs an 80 MB database, so the
+    absolute floor is lowered here and the proportional gate is left alone:
+    the arithmetic under test is the ratio, not the constant.
+    """
+    from telemetry import store
+
+    path = tmp_path / "t.db"
+    conn = store.connect(path)
+    store.init_schema(conn)
+    _fill(conn, "proc_samples", 1_000_000, 60_000)
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    monkeypatch.setattr(store, "VACUUM_MIN_FREE_PAGES", 8)      # ~32 KB
+    store.purge_proc_samples(conn, 1_000_000 + 3_000 * 30)
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    free, size = store.reclaimable_bytes(conn), path.stat().st_size
+    assert free > store.VACUUM_MIN_FREE_PAGES * 4096, "must clear the absolute floor"
+    assert free < size * store.VACUUM_MIN_FREE_FRACTION, "but stay under the fraction"
+    assert store.reclaim(conn) == 0, "a small gain is not worth a full rewrite"
+
+    # Once the free space is worth a tenth of the file, it runs.
+    store.purge_proc_samples(conn, 9_999_999_999)
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    assert store.reclaim(conn) > 0

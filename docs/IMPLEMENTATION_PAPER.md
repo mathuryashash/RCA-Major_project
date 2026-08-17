@@ -716,6 +716,14 @@ Reclamation is the half that makes retention visible, and it is gated twice:
 
 $$\text{vacuum} \iff \text{free pages} \ge 2000 \;\wedge\; \text{disk free} \ge 2 \times \text{db size}$$
 
+with the free space also required to be worth at least a tenth of the file.
+The absolute floor alone was the wrong shape: at the measured growth rate a
+daily purge frees roughly 8 MB, which clears 2,000 pages — so on a 1.2 GB
+database `VACUUM` would have fired every two or three days to rewrite the
+entire file for **0.7% of it**, which is exactly the churn the floor was
+introduced to prevent. Both gates apply, so a small database is governed by
+the constant and a large one by the proportion.
+
 The first gate exists because a full rewrite for a few kilobytes is not worth
 the daily churn. The second exists because `VACUUM` builds a complete second
 copy before swapping it in — starting one without room for it is how a cleanup

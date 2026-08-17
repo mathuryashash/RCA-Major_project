@@ -290,6 +290,15 @@ def purge_foreground_app(conn: sqlite3.Connection, older_than_ts: int) -> int:
 #: the difference, small enough that the daily check almost always skips.
 VACUUM_MIN_FREE_PAGES = 2_000
 
+#: ...but an absolute floor is the wrong shape once the database is large.
+#: At the measured 3.33 MB/day, steady-state purging frees roughly 800 pages a
+#: day, so an 8 MB threshold fires every two or three days -- and on a 1.2 GB
+#: database that means rewriting the whole file to recover 0.7% of it, which
+#: is precisely the churn the floor above exists to avoid. Requiring the free
+#: space to be worth a tenth of the file keeps the cost proportional to the
+#: benefit at every size.
+VACUUM_MIN_FREE_FRACTION = 0.10
+
 
 def reclaimable_bytes(conn: sqlite3.Connection) -> int:
     """Space deleted rows are holding that the filesystem cannot see."""
@@ -324,6 +333,11 @@ def reclaim(conn: sqlite3.Connection) -> int:
         return 0
 
     path = _database_path(conn)
+    if path is not None and path.exists():
+        # Both gates, so a small database is governed by the absolute floor and
+        # a large one by the proportion.
+        if free_bytes < path.stat().st_size * VACUUM_MIN_FREE_FRACTION:
+            return 0
     if path is not None and path.exists():
         try:
             import shutil
