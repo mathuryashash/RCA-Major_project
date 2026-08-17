@@ -308,22 +308,38 @@ def test_vacuum_actually_returns_space_to_the_filesystem(tmp_path):
     conn = store.connect(path)
     store.init_schema(conn)
     _fill(conn, "proc_samples", 1_000_000, 40_000)
-    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    before = path.stat().st_size
 
+    def footprint():
+        """Everything the purge is supposed to bound, as the UI counts it.
+
+        Measuring the main file alone is how the first version of this test
+        passed while production doubled its disk usage: VACUUM in WAL mode
+        writes the whole new database into the WAL, so main shrinks and -wal
+        grows by as much. The Captured Data tab sums main + wal + shm, and so
+        does this.
+        """
+        return sum(
+            path.with_name(path.name + suffix).stat().st_size
+            for suffix in ("", "-wal", "-shm")
+            if path.with_name(path.name + suffix).exists()
+        )
+
+    before = footprint()
     store.purge_proc_samples(conn, 2_000_000)
-    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    after_delete = path.stat().st_size
-    assert after_delete >= before * 0.9, "deleting alone should not shrink the file"
+    after_delete = footprint()
+    assert after_delete >= before * 0.9, "deleting alone should not shrink anything"
     assert store.reclaimable_bytes(conn) > 0
 
+    # No checkpoint here. The previous version of this test issued
+    # PRAGMA wal_checkpoint(TRUNCATE) between reclaim() and the measurement --
+    # a statement that appears nowhere in src/ -- so it asserted a shrink the
+    # application never performed.
     freed = store.reclaim(conn)
-    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    after_vacuum = path.stat().st_size
+    after_vacuum = footprint()
 
     assert freed > 0
     assert after_vacuum < after_delete * 0.5, (
-        f"file did not shrink: {after_delete} -> {after_vacuum}"
+        f"footprint did not shrink: {after_delete} -> {after_vacuum}"
     )
 
 
@@ -402,3 +418,51 @@ def test_expiring_the_focus_record_touches_nothing_the_model_uses():
 
     assert "foreground_app" not in MODELLED_COLUMNS
     assert "user_idle_sec" not in MODELLED_COLUMNS
+
+
+def test_expiring_the_focus_record_removes_it_from_the_file(tmp_path):
+    """The consent dialog says "erased". A NULL is not an erasure.
+
+    secure_delete defaulted to off, so UPDATE ... SET foreground_app = NULL
+    unlinked the cell and left the text readable in the page. Measured before
+    this was fixed: 745 copies of a test application name survived a purge
+    that reported 2,000 rows blanked, and because an in-place shrink frees no
+    pages, VACUUM was gated off and never compacted them away either.
+    """
+    from telemetry import store
+
+    path = tmp_path / "t.db"
+    conn = store.connect(path)
+    store.init_schema(conn)
+    conn.executemany(
+        "INSERT INTO samples (ts, foreground_app) VALUES (?, ?)",
+        [(1000 + i, "SuperSecretApp.exe") for i in range(500)],
+    )
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    store.purge_foreground_app(conn, 999_999)
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    assert conn.execute("SELECT COUNT(foreground_app) FROM samples").fetchone()[0] == 0
+    assert path.read_bytes().count(b"SuperSecretApp.exe") == 0, (
+        "the application name is still readable in the database file"
+    )
+
+
+def test_only_one_damaged_copy_is_kept(tmp_path):
+    """A crash loop could leave twelve full-size copies of the database.
+
+    The supervisor restarts the collector up to MAX_RESTARTS times, and each
+    quarantine keeps a complete copy that no retention rule covers -- inside
+    the change whose purpose is to stop the database filling the disk.
+    """
+    from telemetry import store
+
+    path = tmp_path / "t.db"
+    for _ in range(4):
+        path.write_bytes(b"not a database at all, forty-odd bytes")
+        conn = store.connect(path)        # quarantines, then opens fresh
+        store.init_schema(conn)
+        conn.close()
+
+    assert len(store.quarantine_files(path)) == 1

@@ -564,7 +564,10 @@ def test_verdict_banner_states_the_finding_for_every_evidence_case(qtbot):
 
     view._set_verdict({"causal_support": "supported",
                        "surviving_causal_edges": 6}, leader)
-    assert view.verdict.isVisible() or True          # visibility needs a shown parent
+    # isVisibleTo() does not require a shown ancestor, so this fails if
+    # setVisible(True) is ever dropped. The previous form was
+    # `assert x or True`, which passed whether or not the feature existed.
+    assert view.verdict.isVisibleTo(view)
     assert "cpu_pct" in view.verdict.text()
     assert view.verdict.objectName() == "verdictSupported"
 
@@ -612,3 +615,46 @@ def test_the_empty_causal_graph_is_not_a_white_rectangle():
     assert figure.layout.paper_bgcolor == "#151a2e"
     assert figure.layout.plot_bgcolor == "#151a2e"
     assert "No causal link" in figure.layout.title.text
+
+
+def test_a_failed_run_clears_the_previous_verdict(qtbot):
+    """A stale verdict is not merely old here, it is false.
+
+    workers.py routes "no anomalies were detected" through the failure path,
+    so the commonest benign outcome left the previous run's "Likely root
+    cause: X - supported by 6 causal edges" sitting above a failure line.
+    """
+    from desktop.state import AppState
+    from desktop.views.stage2_view import Stage2View
+
+    view = Stage2View(AppState())
+    qtbot.addWidget(view)
+    view._set_verdict({"causal_support": "supported", "surviving_causal_edges": 6},
+                      [{"metric": "cpu_pct", "rank": 1, "composite_score": 1.0}])
+    assert "cpu_pct" in view.verdict.text()
+
+    view._on_failed("No anomalies were detected in this observed window.")
+
+    assert view.verdict.text() == "", "a failed run must not leave a verdict up"
+    assert not view.verdict.isVisibleTo(view)
+
+
+def test_the_verdict_sentence_reaches_a_screen_reader(qtbot):
+    """setAccessibleName on a QLabel replaces its text for assistive tools.
+
+    QAccessibleDisplay returns accessibleName() in place of the label's text
+    when one is set, so naming this "Analysis verdict" announced two words and
+    none of the finding.
+    """
+    from desktop.state import AppState
+    from desktop.views.stage2_view import Stage2View
+
+    view = Stage2View(AppState())
+    qtbot.addWidget(view)
+    view._set_verdict({"causal_support": "no supported causal chain"},
+                      [{"metric": "disk_write_bps", "rank": 1, "composite_score": 1.0}])
+
+    assert not view.verdict.accessibleName(), (
+        "an accessible name would replace the sentenceitself"
+    )
+    assert "disk_write_bps" in view.verdict.text()

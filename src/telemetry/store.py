@@ -83,16 +83,58 @@ def quarantine(path: Path | str) -> Path | None:
     target = path.with_name(f"{path.name}.corrupt-{stamp}")
     try:
         path.replace(target)
-        # WAL and shared-memory sidecars describe the old file; leaving them
-        # behind would corrupt the replacement on its first open.
-        for suffix in ("-wal", "-shm"):
-            sidecar = path.with_name(path.name + suffix)
-            if sidecar.exists():
-                sidecar.unlink()
     except OSError:
+        _LOGGER.exception("Database is unreadable and could not be moved aside.")
         return None
+
+    # Past this point the user's database has already moved. The sidecars are
+    # cleaned in their own guard: bundling them with the rename meant a
+    # sharing violation on the WAL -- an antivirus or indexer holding it for a
+    # moment is enough -- returned None *after* the move, so the caller
+    # re-raised, the app crashed anyway, a stale WAL describing a different
+    # database was left to poison the replacement, and the one log line saying
+    # where the history went never executed.
+    for suffix in ("-wal", "-shm"):
+        sidecar = path.with_name(path.name + suffix)
+        try:
+            sidecar.unlink(missing_ok=True)
+        except OSError:
+            # Move it beside the database it belongs to rather than leaving it
+            # to be adopted by the fresh file.
+            try:
+                sidecar.replace(target.with_name(target.name + suffix))
+            except OSError:
+                _LOGGER.error(
+                    "Could not remove %s; delete it by hand before restarting.",
+                    sidecar,
+                )
+    _prune_quarantines(path, keep=1)
     _LOGGER.error("Database was unreadable; moved it to %s and started fresh.", target)
     return target
+
+
+def quarantine_files(path: Path | str) -> list[Path]:
+    """Damaged databases set aside beside ``path``, newest last."""
+    path = Path(path)
+    return sorted(path.parent.glob(f"{path.name}.corrupt-*"))
+
+
+def _prune_quarantines(path: Path, keep: int) -> None:
+    """Keep only the most recent damaged copies.
+
+    A failing disk plus a supervisor that restarts the collector up to twelve
+    times can leave twelve full-size copies of a multi-gigabyte database in a
+    directory whose whole purpose is to stay bounded. One is enough to hand to
+    a recovery tool; the rest are the disk-filling problem this module exists
+    to prevent, wearing the costume of a safety measure.
+    """
+    stale = quarantine_files(path)[:-keep] if keep else quarantine_files(path)
+    for old in stale:
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                old.with_name(old.name + suffix).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def connect(path: Path | str) -> sqlite3.Connection:
@@ -122,6 +164,15 @@ def _open(path: Path) -> sqlite3.Connection:
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        # Overwrite freed cell content with zeros instead of leaving it in the
+        # page. Without this, expiring foreground_app unlinks the string and
+        # leaves it readable in the file: measured, 745 copies of a test
+        # application name survived a purge that reported 2,000 rows blanked,
+        # while the consent dialog told the user it had been erased. An
+        # in-place shrink also frees no pages, so VACUUM never compacts them
+        # away either. The cost is extra writes on delete, which is nothing at
+        # a 30-second cadence.
+        conn.execute("PRAGMA secure_delete=ON")
     except sqlite3.Error:
         # A corrupt file connects lazily and only fails on first use, so the
         # connection has to be closed before the file can be moved on Windows.
@@ -292,6 +343,15 @@ def reclaim(conn: sqlite3.Connection) -> int:
 
     try:
         conn.execute("VACUUM")
+        # VACUUM in WAL mode writes the entire new database into the WAL, so
+        # without a checkpoint nothing reaches the filesystem and the total
+        # footprint *doubles*. Measured on a 45 MB database: main stayed at
+        # 45.0 MB, the WAL grew to 44.7 MB, and the Captured Data tab -- which
+        # sums main + wal + shm -- would have shown the disk usage rising
+        # immediately after the purge meant to reduce it. The collector holds
+        # its connection for the whole logon session, so this never resolved
+        # on its own.
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     except sqlite3.Error:
         # Contention or a read-only file. Nothing is lost -- the space stays
         # on the free list and the next daily pass will try again.

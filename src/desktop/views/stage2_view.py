@@ -331,7 +331,12 @@ class Stage2View(QWidget):
 
         self.verdict.setObjectName(style)
         self.verdict.setText(text)
-        self.verdict.setAccessibleName("Analysis verdict")
+        # Description, not name. QAccessibleDisplay returns accessibleName() in
+        # place of a label's text when one is set, so naming this "Analysis
+        # verdict" replaced the entire sentence with a category word -- a
+        # screen reader announced two words and none of the finding. The
+        # accessibility fix had made the headline feature less accessible.
+        self.verdict.setAccessibleDescription("Analysis verdict")
         # Qt does not restyle on an objectName change without this.
         self.verdict.style().unpolish(self.verdict)
         self.verdict.style().polish(self.verdict)
@@ -378,6 +383,13 @@ class Stage2View(QWidget):
         # failure text.
         self.progress_bar.setValue(0)
         self.status_label.setText(f"Failed: {message}")
+        # A verdict from an earlier run is not merely stale here, it is wrong:
+        # the worker reports "no anomalies were detected" through this path,
+        # so the commonest benign outcome left the previous run's "Likely root
+        # cause: X -- supported by 6 causal edges" sitting above a failure
+        # line. Nothing is a safer thing to say than something untrue.
+        self.verdict.setVisible(False)
+        self.verdict.clear()
         self._apply_model_gate(True)
 
     def _export_md(self):

@@ -199,7 +199,8 @@ def store_summary(path: Path | str | None = None) -> dict:
                      "samples": 0, "events": 0, "proc_samples": 0, "gaps": 0,
                      "first_ts": None, "last_ts": None, "latest": {}, "available": set(),
                      "sampling_gaps": 0, "gap_hours": 0.0,
-                     "expected_samples": 0, "coverage_pct": 0.0}
+                     "expected_samples": 0, "coverage_pct": 0.0,
+                     "quarantined": 0, "quarantined_bytes": 0}
     if not db.exists():
         return summary
 
@@ -208,6 +209,14 @@ def store_summary(path: Path | str | None = None) -> dict:
         for candidate in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm"))
         if candidate.exists()
     )
+    # A database found damaged is renamed aside rather than deleted, and that
+    # copy is not covered by any retention rule. Leaving it out of "size on
+    # disk" meant the one file most likely to be surprisingly large was the
+    # one the interface did not mention.
+    quarantined = [q for q in db.parent.glob(f"{db.name}.corrupt-*") if q.is_file()]
+    summary["quarantined"] = len(quarantined)
+    summary["quarantined_bytes"] = sum(q.stat().st_size for q in quarantined)
+    summary["size_bytes"] += summary["quarantined_bytes"]
     connection = sqlite3.connect(str(db))
     try:
         for table in ("samples", "events", "proc_samples"):

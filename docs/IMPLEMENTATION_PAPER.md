@@ -743,6 +743,52 @@ Sequencing was deliberate. Corruption recovery (§10.4) landed **before** this,
 because `VACUUM` rewrites the entire database and is the single most
 dangerous routine operation the application performs.
 
+### 6.3.2 The fix was worse than the defect, and its test hid that
+
+An adversarial review of the change above found a fourth instance of the
+pattern catalogued in §10.2 — and this one was written two commits after
+documenting it.
+
+**`VACUUM` in WAL mode writes the entire new database into the WAL.** Without a
+checkpoint nothing reaches the filesystem, and the collector holds its
+connection for the whole logon session, so the space never returned. Measured
+on a 45 MB database:
+
+| | main | wal | total |
+|---|---|---|---|
+| before purge | 45.0 | 0.0 | 45.0 MB |
+| after delete | 45.0 | 44.7 | 89.7 MB |
+| **after `reclaim()` — as shipped** | 45.0 | 44.7 | **89.7 MB** |
+| after checkpoint | 0.0 | 0.0 | 0.1 MB |
+
+The change titled "bound the database so collection cannot fill the disk"
+**doubled the footprint** at the moment it claimed to reduce it, and because
+the Captured Data tab sums `main + wal + shm`, the user would have watched
+disk usage rise immediately after the cleanup.
+
+**The test passed because it issued `PRAGMA wal_checkpoint(TRUNCATE)` between
+`reclaim()` and the measurement** — a statement that appears nowhere in `src/`
+— and measured only the main file. It asserted a shrink the application never
+performed, on half the footprint. That is the §10.2 signature exactly: a test
+that does something production does not, and therefore cannot fail for the
+reason it exists.
+
+`reclaim()` now checkpoints, and the test measures `main + wal + shm` with no
+checkpoint of its own. Re-measured after the fix: **89.7 MB → 0.1 MB.**
+
+A second finding from the same review is worse, because it made the consent
+dialog untrue. `PRAGMA secure_delete` defaults to off, so
+`UPDATE samples SET foreground_app = NULL` unlinked the cell and left the
+string readable in the page freeblock — and since an in-place shrink frees no
+pages, `VACUUM` was gated off by the free-page threshold and never compacted
+it away. Measured: **745 copies of a test application name survived a purge
+that reported 2,000 rows blanked**, while §3.4 and the dialog both told the
+user it had been erased. The test asserted the *SQL value* was NULL, which is
+the wrong question. `secure_delete` is now on and the test greps the file
+itself: **745 → 0**.
+
+Three further findings are recorded in §10.5.
+
 ### 6.4 What actually binds
 
 **Training compute is not a limiting factor.** Even maximal settings complete
@@ -1174,6 +1220,53 @@ parent and treating it as damage would move a healthy database aside every time
 the collector held a write lock. The damaged file is now renamed rather than
 deleted, and contention is explicitly excluded from the recovery path, with a
 test that fails if a locked database is ever quarantined.
+
+---
+
+## 10.5 What adversarial review caught that testing did not
+
+Two reviewers were pointed at the previous section's changes with one
+instruction: this project has a documented history of fixes that pass their
+own tests while destroying data, so find the next one. They found five defects
+between them, in code that had 119 passing tests.
+
+| Defect | Why the tests missed it |
+|---|---|
+| `VACUUM` doubled the on-disk footprint (§6.3.2) | the test checkpointed; production never does |
+| `foreground_app` was not erased, only unlinked (§6.3.2) | the test asserted the SQL value, not the file |
+| `quarantine()` moved the database aside, failed to remove the poisoned WAL, and suppressed the log line naming where the history went | no test injected a sharing violation on the sidecar |
+| Up to twelve full-size `.corrupt-*` copies, uncounted in "size on disk" | nothing tested repeated quarantine |
+| The verdict banner was never cleared on failure | the test called `_set_verdict` directly, never the failure path |
+
+The banner case is the most instructive. `workers.py` routes "no anomalies were
+detected" through the **failure** signal, so the commonest benign outcome left
+the previous run's *"Likely root cause: cpu_pct — supported by 6 causal edges"*
+displayed above a line reading "Failed: No anomalies were detected". The test
+exercised the function in isolation and could not see it.
+
+Two smaller ones are worth recording because both inverted their own intent.
+`setAccessibleName` on a `QLabel` **replaces** the label's text for assistive
+technology, so naming the banner "Analysis verdict" meant a screen reader
+announced two words and none of the finding — the accessibility fix made the
+headline feature less accessible. And one new assertion read
+`assert view.verdict.isVisible() or True`, which is true unconditionally; it
+would have passed with the feature deleted.
+
+Four statements in the consent dialog were also found to be false: process
+sampling tightens to 30 seconds under load rather than the stated 5 minutes;
+"nothing is kept indefinitely" is untrue once the collector is stopped, since
+every purge runs only from its loop; quarantined copies obey no retention rule;
+and the focus record was described as the shortest-lived when it is tied with
+process detail. All four are corrected, and the dialog now states the caveat
+about retention depending on a running collector rather than implying it is a
+property of the data.
+
+**The general lesson is not "write more tests".** All five defects sat behind
+tests that existed and passed. They were missed because each test asked a
+question adjacent to the one that mattered — the SQL value instead of the
+bytes, the main file instead of the footprint, the function instead of the
+path that calls it. Adversarial review found them in a single pass because it
+was asked to assume the fix was wrong rather than to confirm it was right.
 
 ---
 
