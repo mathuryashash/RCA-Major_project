@@ -1154,17 +1154,8 @@ incidents and should not be read as a trend.
 
 **The subsystem map is doing far more work than anyone knew.** Across all 92
 incidents the statistics accepted **115** pairs after FDR correction and the
-effect-size floor. The hand-written topology map then discarded **50 of them —
-43%.** It intervened in 15 incidents and was the deciding factor in 2.
-
-That reframes §8.3 entirely. The `net_sent_bps → cpu_pct_max_core` prune was
-recorded as a single curious observation; it is in fact one instance of a rule
-that rejects **nearly half** of everything the statistical layer accepts. A
-hand-written map in `dynamic_graph.py`, never validated against anything, is
-the single largest filter in the causal pipeline — larger than multiple-testing
-correction and the effect-size floor, whose rejections it then compounds.
-Whether those 50 pairs were spurious or the map is incomplete is now the most
-consequential open question in this system, and it is no longer a footnote.
+effect-size floor, and only **65 (57%)** reached the final graph. §8.4.3 breaks
+down what removed the other 50, and audits whether it should have.
 
 **The layer is not as silent as previously described.** Earlier text
 characterised it as producing nothing on the majority of incidents, inferred
@@ -1177,6 +1168,89 @@ disk or swap: `disk_busy_pct` (8), `swap_used_delta` (4), `disk_read_bps` (4),
 The survey costs nothing to repeat and should be re-run whenever the gates,
 the map, or the model change — it is the only measurement here with a sample
 size worth the name.
+
+### 8.4.3 Auditing the subsystem map
+
+The first attempt at this measurement got the attribution wrong, and the error
+is worth stating because it is the same shape as the others in this paper. The
+50 removed pairs were all attributed to the topology map. They were not: cycles
+are broken inside `CausalGraphBuilder.build()` **before** `refine_causal_graph`
+ever sees an edge, so the figure conflated two filters. The tell was in the
+data and was initially read past — `disk → disk` appeared as "rejected" 8
+times, and the map permits same-subsystem edges by construction, so something
+else was removing them. Asking the map directly rather than inferring its
+verdict from the survivors gives:
+
+| | pairs | share |
+|---|---|---|
+| accepted by the statistics | 115 | — |
+| survived to the final graph | 65 | 57% |
+| **rejected by the subsystem map** | **30** | **26%** |
+| removed by cycle-breaking | 20 | 17% |
+
+26%, not 43%. Still the largest single filter after the statistical gates, and
+still never validated — but a quarter rather than a half.
+
+**What the map rejects.** Every rejected transition has *zero* survivors,
+because the map forbids whole classes rather than individual edges:
+
+| transition | rejected | kept | strongest rejected pair |
+|---|---|---|---|
+| `disk → memory` | 13 | 0 | `disk_busy_pct → swap_used_bytes` (0.758, lag 2) |
+| `memory → cpu` | 7 | 0 | `swap_pct → cpu_freq_mhz` (0.138, lag 1) |
+| `network → disk` | 4 | 0 | `net_recv_bps → disk_write_bps` (**0.982**, lag 2) |
+| `disk → cpu` | 3 | 0 | `disk_busy_pct → cpu_pct` (0.322, lag 3) |
+| `memory → process` | 3 | 0 | `swap_used_bytes → process_count` (0.109, lag 1) |
+
+**The map is a strict total order**, and that is the root of it:
+
+```
+power, process  →  cpu  →  memory  →  disk  →  network
+```
+
+`network` has out-degree zero — a pure sink. Nothing in this system can ever be
+reported as caused by network activity. `power` and `process` have in-degree
+zero and can never be caused by anything. Because `is_path_possible` uses
+`nx.has_path`, the order is transitive: every "upstream" direction is forbidden
+outright.
+
+That encodes an assumption — resource pressure flows one way, from power
+through compute to I/O — which is defensible as a first sketch and wrong as a
+description of a real machine. Judged individually:
+
+- **`network → disk` is almost certainly a real mechanism the map cannot
+  express.** A download arrives over the network and is written to disk. The
+  strongest single relationship in the entire dataset, at **0.982**, is
+  `net_recv_bps → disk_write_bps`, and it is discarded because network is a
+  sink. The map has `disk → network` — the upload direction — and not its
+  mirror.
+- **`disk → memory` is real on Windows.** Sustained I/O grows the standby file
+  cache, which consumes available memory. 13 rejections, the most of any
+  transition.
+- **`disk → cpu` is real.** Interrupt and DPC handling, and I/O wait, put
+  kernel time on the CPU during heavy disk activity.
+- **`memory → cpu` is plausible but confounded.** Page-fault handling does cost
+  CPU, but the strongest instance targets `cpu_freq_mhz`, which is governed by
+  thermal and power policy; both sides are more likely driven by overall load
+  than by each other.
+- **`memory → process` looks spurious.** Strength 0.109 against a floor of
+  0.10 — it barely cleared the gate, and memory pressure causing process count
+  to change is hard to argue.
+
+So of the five rejected classes, three describe mechanisms that genuinely exist
+and one is probably noise. **The map is not wrong so much as one-directional**:
+it models resource pressure flowing downhill and has no vocabulary for the
+feedback that makes I/O expensive. Adding the reverse edges would be simple,
+but it would also make the graph cyclic — and cycle-breaking already removes
+17% of pairs, so the two mechanisms would begin to fight. That is a design
+question, not a patch, and it is recorded here rather than answered.
+
+None of this establishes that the rejected pairs are causal. Granger causality
+over correlated resource metrics finds a great deal that is confounded, and the
+map exists precisely to encode prior knowledge the statistics do not have. The
+finding is narrower and firmer: **the prior it encodes forbids mechanisms that
+demonstrably exist, and one of them accounts for the strongest relationship
+this system has ever measured.**
 
 ### 8.5 Idle: the false-positive floor
 

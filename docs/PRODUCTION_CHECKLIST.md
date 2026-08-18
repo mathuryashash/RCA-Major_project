@@ -131,12 +131,19 @@ was ticked on the strength of a check that never ran. It runs now.
 - [ ] Test a fault whose cause is *not* the top-ranked metric. **Both passing
       runs put the injected fault at the top of a severity ranking, so nothing
       here separates a correct causal answer from a correct severity answer**
-- [ ] **Decide whether the subsystem map is incomplete.** Now urgent, not a
-      footnote: across 92 incidents the statistics accepted 115 pairs and the
-      hand-written map discarded **50 of them (43%)**. It is the largest
-      single filter in the causal pipeline — bigger than FDR correction and
-      the effect-size floor — and it has never been validated against
-      anything
+- [x] **Audit what the subsystem map rejects** — `tools/audit_topology_map.py`.
+      Of 115 accepted pairs, 65 survive, **30 (26%) are rejected by the map**
+      and 20 (17%) by cycle-breaking. (An earlier figure of 43% attributed
+      both to the map; cycles are broken before the map is consulted.)
+- [ ] **Decide whether to give the map reverse edges.** It is a strict total
+      order `power, process → cpu → memory → disk → network`, so `network` is
+      a sink and nothing can ever be reported as caused by network activity.
+      Three of the five rejected classes describe real mechanisms —
+      `network → disk` (a download writes to disk; **strength 0.982, the
+      strongest relationship measured anywhere in this project**),
+      `disk → memory` (standby file cache), `disk → cpu` (interrupt and DPC
+      handling). Adding them makes the graph cyclic, and cycle-breaking
+      already removes 17% of pairs, so the two filters would start to fight
 
 ### ⚠️ Long-run stability
 
