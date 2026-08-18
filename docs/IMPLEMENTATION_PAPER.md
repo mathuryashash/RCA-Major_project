@@ -602,6 +602,30 @@ Run RCA, Train, Find Incidents and both consent buttons. That is a WCAG 2.4.7
 failure and is now fixed, along with accessible names on the controls that a
 `QFormLayout` could not buddy to their labels.
 
+That first pass fixed the controls it enumerated and missed the two nobody had
+listed — `QCheckBox` and `QSlider`, both still at zero changed pixels between
+focused and blurred. The checkbox is the Event Log opt-in, which makes it the
+worst control in the application to leave unindicated: a keyboard user could
+not see which control they were about to toggle to store message text. All
+eight focusable widget types now show an indicator, verified by rendering each
+one focused and blurred and counting changed pixels, with `sizeHint` asserted
+identical in both states so the ring cannot shift the layout.
+
+The verification is worth recording because it went wrong first, in a way that
+would have produced a confidently false claim. An early probe reported that the
+checkbox rule did not render, and successive experiments appeared to show that
+Qt required a background declaration alongside the border, rejected the
+`transparent` keyword, ignored `border-color` in favour of the full `border`
+shorthand, and silently discarded declarations following an inline comment.
+**All four of those conclusions were artefacts.** Qt paints the `:focus`
+pseudo-state only for the *active* window, and the probe never called
+`activateWindow()`; whichever measurement happened to run while some earlier
+window still held activation passed, and the rest failed. Each failure invited
+a plausible explanation, and each explanation survived exactly as long as the
+next experiment took to contradict it. The elaborate workarounds were reverted
+and the rule is four lines. The regression test activates the window
+explicitly, and was confirmed to fail when either rule is removed.
+
 ### 5.3 What the report refuses to say
 
 Four distinct outcomes are reported differently, and collapsing them was the

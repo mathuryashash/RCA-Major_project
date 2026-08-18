@@ -216,6 +216,11 @@ published SHA256.
 - [ ] **DPI scaling** — never tested at 125%/150%/200%
 - [ ] **Small screens** — window opens at 1400×900; behaviour below that is unknown
 - [ ] **Multi-monitor** — full-screen dialog on the correct display
+- [x] **Focus indicators on every focusable control** — a stylesheet
+      background stops Qt drawing the native focus rectangle, so styling a
+      widget silently removes its indicator. Verified by rendering, not by
+      reading the sheet: 8 of 8 controls now change pixels on focus with no
+      size shift, and the test fails if either rule is removed
 - [ ] **Keyboard navigation** — tab order, Enter to activate, Esc to cancel
 - [ ] **Screen reader labels** on controls and figures
 - [ ] Contrast audit against WCAG AA

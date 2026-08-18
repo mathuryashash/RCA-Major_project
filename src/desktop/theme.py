@@ -253,16 +253,43 @@ QLabel#verdictUntested {{
 
 /* Every button carried a stylesheet background, which stops Qt drawing the
    native focus rectangle -- so Tab moved an invisible cursor across Run RCA,
-   Train, Find Incidents and both consent buttons. WCAG 2.4.7 failure. */
+   Train, Find Incidents and both consent buttons. WCAG 2.4.7 failure.
+
+   The ring costs a pixel on each edge over the base 1px border and the
+   padding gives it back. Qt does not re-run sizeFromContents on a
+   pseudo-state change, so this is belt and braces rather than load-bearing --
+   but wrong numbers would shrink the button by 4px the day that changes. */
 QPushButton:focus {{
     border: 2px solid {ACCENT};
-    padding: 5px 11px;
+    padding: 7px 19px;
 }}
 QPushButton#primaryAction:focus {{
     border: 2px solid {TEXT};
 }}
 QTabBar::tab:focus {{ border: 2px solid {ACCENT}; }}
 QTableWidget:focus, QPlainTextEdit:focus {{ border: 1px solid {ACCENT}; }}
+
+/* The two controls the button pass missed: measured at 0 changed pixels
+   between focused and blurred, against 1573 on a QPlainTextEdit. The checkbox
+   is the Event Log opt-in, which makes it the worst widget here to leave
+   unindicated -- a keyboard user could not see which control they were about
+   to toggle to store message text.
+
+   The transparent border at rest is what keeps the geometry stable: adding a
+   border only on focus would shift the groove and the label by two pixels
+   every time focus arrived. Verified: sizeHint is identical in both states. */
+QCheckBox {{
+    border: 2px solid transparent;
+    border-radius: 6px;
+    padding: 2px;
+}}
+QCheckBox:focus {{ border-color: {ACCENT}; }}
+
+QSlider {{
+    border: 2px solid transparent;
+    border-radius: 6px;
+}}
+QSlider:focus {{ border-color: {ACCENT}; }}
 """
 
 

@@ -658,3 +658,55 @@ def test_the_verdict_sentence_reaches_a_screen_reader(qtbot):
         "an accessible name would replace the sentenceitself"
     )
     assert "disk_write_bps" in view.verdict.text()
+
+
+def test_every_focusable_control_shows_a_focus_indicator(qtbot):
+    """WCAG 2.4.7: keyboard focus must be visible on every control.
+
+    A stylesheet background on a widget stops Qt drawing the native focus
+    rectangle, so styling one silently removes its indicator. The button pass
+    covered QPushButton and missed QCheckBox and QSlider -- the checkbox being
+    the Event Log opt-in, the worst one here to leave unindicated.
+
+    Measured by rendering, because reading the stylesheet cannot tell you
+    whether Qt honoured the rule. The window must be *activated*: Qt paints
+    the :focus pseudo-state only for the active window, so without
+    activateWindow() every control reports zero changed pixels and an absent
+    indicator is indistinguishable from a working one.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton, QSlider
+
+    from desktop.theme import apply_theme
+
+    apply_theme(QApplication.instance())
+
+    def changed_pixels(widget):
+        widget.resize(260, 34)
+        qtbot.addWidget(widget)
+        widget.show()
+        widget.activateWindow()
+        widget.raise_()
+        QApplication.processEvents()
+
+        widget.clearFocus()
+        QApplication.processEvents()
+        before, hint_before = widget.grab().toImage(), widget.sizeHint()
+
+        widget.setFocus(Qt.OtherFocusReason)
+        QApplication.processEvents()
+        after, hint_after = widget.grab().toImage(), widget.sizeHint()
+
+        assert hint_before == hint_after, "focus must not resize the control"
+        return sum(
+            1
+            for y in range(before.height())
+            for x in range(before.width())
+            if before.pixel(x, y) != after.pixel(x, y)
+        )
+
+    for widget in (QCheckBox("Also store Event Log message text"),
+                   QSlider(Qt.Horizontal),
+                   QPushButton("Run RCA")):
+        name = type(widget).__name__
+        assert changed_pixels(widget) > 0, f"{name} draws no focus indicator"
