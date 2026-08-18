@@ -95,6 +95,52 @@ def _burn_memory(stop_at: float, budget_bytes: int) -> None:
         time.sleep(2)
 
 
+def memory_fault_is_detectable() -> tuple[bool, str]:
+    """Can a *bounded* memory injection exceed what this host does anyway?
+
+    The budget above is half of free memory, which is a safety rule and also,
+    on a machine that habitually runs full, a guarantee of failure: half of
+    what is free can never take usage past the level the machine already
+    reaches on its own. Measured on the development host, whose median
+    mem_pct across 30,199 samples is 95.2% -- a 1.91 GB injection landed the
+    window at 87.4%, the 9th percentile of its own history. The detector
+    correctly flagged nothing, and the run was scored FAIL as though the
+    detector were at fault.
+
+    Reporting "not measurable here" is the honest outcome. A FAIL would blame
+    the product for a limit of the test.
+    """
+    try:
+        import psutil
+
+        from telemetry import analysis, config
+    except Exception:                           # noqa: BLE001
+        return True, "could not read history; proceeding"
+
+    frame = analysis.load_samples(config.db_path())
+    if frame.empty or "mem_pct" not in frame:
+        return True, "no history to compare against; proceeding"
+
+    history = frame["mem_pct"].dropna()
+    if len(history) < 500:
+        return True, f"only {len(history)} samples of history; proceeding"
+
+    memory = psutil.virtual_memory()
+    budget = min(2 * 1024**3, int(memory.available * 0.5))
+    projected = 100.0 * (memory.total - memory.available + budget) / memory.total
+    p95 = float(history.quantile(0.95))
+
+    if projected <= p95:
+        return False, (
+            f"a {budget / 1024**3:.2f} GB hold would reach {projected:.1f}% memory, "
+            f"under this machine's own p95 of {p95:.1f}% -- the injection cannot "
+            f"exceed normal, so nothing here could detect it"
+        )
+    return True, (
+        f"projected {projected:.1f}% memory vs p95 {p95:.1f}% of history: detectable"
+    )
+
+
 def inject(fault: str, minutes: float) -> tuple[pd.Timestamp, pd.Timestamp]:
     """Run the load, and return the window it ran in."""
     stop_at = time.time() + minutes * 60
@@ -223,6 +269,13 @@ def main() -> int:
     args = parser.parse_args()
 
     print(f"=== fault injection: {args.fault} ===")
+    if args.fault == "memory":
+        reachable, why = memory_fault_is_detectable()
+        print(f"  {why}")
+        if not reachable:
+            print()
+            print("INCONCLUSIVE")
+            return 2
     start, end = inject(args.fault, args.minutes)
     print(f"  window: {start:%H:%M:%S} to {end:%H:%M:%S} UTC")
     result = evaluate(args.fault, start, end)

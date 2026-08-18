@@ -889,9 +889,15 @@ of minutes, because it must wait for real samples at the real cadence.
 | CPU burn, 7 min | 14 | 6 of 29 | **0 — never tested** | 0 | yes | PASS (detection only) |
 | CPU burn, 30 min | 60 | 6 of 29 | 10 | **6** | yes | **PASS, explained** |
 | Disk burn, 30 min | 60 | 4 of 29 | 1 | **0 (pruned)** | yes | PASS, unexplained |
-| Memory hold, 30 min | 60 | 2 of 29 | 0 | 0 | **no** | **FAIL — wrong culprit** |
-| Memory hold, 30 min (after fix) | 60 | 3 of 29 | 0 | 0 | yes | PASS, unexplained |
+| Memory hold, 30 min | 60 | 2 of 29* | 0 | 0 | **no** | **FAIL — wrong culprit** |
+| Memory hold, 30 min (after fix) | 60 | 3 of 29* | 0 | 0 | yes | PASS, unexplained |
+| Memory hold, 30 min (clean baseline) | 60 | **0 of 29** | — | — | — | **not measurable here (§8.4.1)** |
 | Idle, 30 min | 60 | 1 of 29 | — | — | — | 3.4% false positive |
+
+\* Both earlier memory runs were scored on a machine already at 84% and 98%
+memory and already swapping; what they flagged was `swap_used_delta`, which may
+have been ambient rather than injected. Read their detection results as
+unproven — see §8.4.1.
 
 Each run found something the previous ones could not. Read in order they
 form a rough ladder of what the system can and cannot do: detect (CPU, 7 min),
@@ -1039,6 +1045,79 @@ In both runs the detection that *did* fire came from `swap_used_delta`, a
 derived rate, rather than from the level metric a person would look at. If the
 level metric is systematically insensitive on hosts that habitually run near
 full, that is a real gap for the machines most likely to need this tool.
+
+### 8.4.1 The memory fault cannot be measured on this machine, and the harness said FAIL
+
+A third memory run was performed on a deliberately cleared machine — 4.51 GB
+free, 71.3% used, swap at 18.3%, against the 84% and 98% of the earlier two.
+A **1.91 GB** hold over 30 minutes produced:
+
+```
+samples analysed : 60
+metrics flagged  : 0 -> []
+DETECTED         : NO
+FAIL
+```
+
+Nothing flagged at all. Comparing the injection window against the preceding
+half hour explains why, and it is not a detector defect:
+
+| metric | 30 min before | during fault | delta |
+|---|---|---|---|
+| `mem_pct` | 93.8 | 87.4 | **−6.3** |
+| `mem_available_mb` | 1,006 | 2,023 | +1,017 |
+| `swap_pct` | 44.8 | 17.8 | −27.0 |
+
+**Memory was freer during the fault than before it.** Freeing 4 GB to make the
+test possible moved the machine further from its own normal than the injection
+then moved it back. Against the learned distribution the window is not
+anomalous in the slightest:
+
+```
+mem_pct over 30,199 collected samples
+p25 93.2%   p50 95.2%   p75 96.9%   p95 98.1%   max 99.9%
+fault window average 87.4%  ->  the 9th percentile
+```
+
+The model was right. An 87.4% window on a host whose median is 95.2% is
+unusually *calm*, and flagging it would have been a false positive.
+
+**The defect is in the harness, and it is structural.** The injection is
+bounded to half of available memory — a safety rule adopted after an earlier
+version allocated until `MemoryError` (§10.3). On a machine that habitually
+runs near full, that bound is also a guarantee of failure: half of what is
+free cannot take usage past a level the machine already reaches unaided. When
+little is free the budget is tiny; when much is free it is because usage just
+dropped, so the injection only claws back toward normal. **A bounded memory
+injection is undetectable on this host by construction**, and no duration or
+retry changes that.
+
+Two consequences follow. The harness now checks reachability before injecting
+and reports `INCONCLUSIVE` with the arithmetic rather than `FAIL`:
+
+```
+a 1.17 GB hold would reach 92.5% memory, under this machine's own p95 of
+98.1% -- the injection cannot exceed normal, so nothing here could detect it
+```
+
+Blaming the detector for a limit of the test is the same error as §6.3.2's
+test that checkpointed where production did not, arriving from the opposite
+direction: there a test passed for a reason the product did not earn, here a
+test failed for a reason the product did not deserve.
+
+And it **retroactively weakens the two earlier memory runs**. Both were
+scored on a machine already at 84% and 98% memory, already swapping, and what
+they flagged was `swap_used_delta` — plausibly the ambient thrashing rather
+than the injection. Their attribution results stand, having been re-checked by
+hand, but their *detection* results should be read as unproven rather than as
+passes. The evaluation table is annotated accordingly.
+
+**What this does not say.** It is not evidence that memory detection is
+broken; it is evidence that this machine cannot test it. A host with a normal
+distribution of memory usage would answer the question in one run. That is now
+the strongest argument in this paper for repeating the evaluation on second
+hardware — not generality for its own sake, but because one measurement is
+unobtainable here at all.
 
 ### 8.5 Idle: the false-positive floor
 

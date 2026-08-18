@@ -41,6 +41,7 @@ pipeline saw. **First measured results on this machine:**
 | CPU burn, 30 min | 60 | 6 of 29 | **6 edges survived** of 10 significant pairs | **PASS** |
 | Disk burn, 30 min | 60 | 4 of 29 | 1 pair accepted, **pruned by topology** | PASS, unexplained |
 | Memory hold, 30 min | 60 | 2 of 29 | no chain | **FAIL — wrong culprit named** |
+| Memory hold, 30 min, clean baseline | 60 | **0 of 29** | — | **not measurable on this host** |
 | Idle, 30 min | 60 | 1 of 29 (`mem_available_mb`) | no chain | 3.4% false positives |
 
 **The 30-minute run is the one that settles it.** We caused a CPU burn, and
@@ -107,10 +108,17 @@ was ticked on the strength of a check that never ran. It runs now.
       incomplete: the culprit was named *tenth of ten* because ordering still
       used CPU. Processes are now ranked by their share of the window maximum
       in either dimension, which moves it to second
-- [ ] Explain why `mem_pct` does not flag under a memory injection —
-      **reproduced twice now**, while `swap_used_delta` fires both times.
-      Either this host's baseline spans wide memory pressure, or memory
-      features are under-weighted in scaling or thresholding
+- [x] **Explain why `mem_pct` does not flag under a memory injection** —
+      answered, and the answer is that this machine cannot test it. Its median
+      `mem_pct` across 30,199 samples is **95.2%**; a 1.91 GB hold on a cleared
+      machine landed the window at 87.4%, the **9th percentile** of its own
+      history. The injection is bounded to half of free memory for safety, and
+      on a habitually-full host that bound cannot exceed normal usage — the
+      fault is undetectable by construction. The harness now reports
+      INCONCLUSIVE with the arithmetic instead of blaming the detector
+- [ ] **Re-run memory detection on a second machine.** This is now the
+      strongest reason to test other hardware: not generality, but a
+      measurement that is unobtainable here at all
 - [ ] Tighten the harness's attribution check — it matches any process named
       "python", and this machine runs several
 - [ ] Track causal yield across many incidents rather than one
