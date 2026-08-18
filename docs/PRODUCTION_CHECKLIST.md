@@ -121,13 +121,22 @@ was ticked on the strength of a check that never ran. It runs now.
       measurement that is unobtainable here at all
 - [ ] Tighten the harness's attribution check — it matches any process named
       "python", and this machine runs several
-- [ ] Track causal yield across many incidents rather than one
+- [x] **Track causal yield across many incidents** — 175 incidents found in
+      real history, 92 analysable, surveyed in 1.7 min by
+      `tools/measure_causal_yield.py`. **31.5% produce a supported chain**;
+      **47% of all incidents are below the Granger floor** and cannot be
+      tested at all; yield doubles from 25% to ~53% once windows exceed an
+      hour. Repeatable, no injection required
 - [ ] Repeat on a second machine — every number here is from one host
 - [ ] Test a fault whose cause is *not* the top-ranked metric. **Both passing
       runs put the injected fault at the top of a severity ranking, so nothing
       here separates a correct causal answer from a correct severity answer**
-- [ ] Decide whether the subsystem map is incomplete (a network→CPU path via
-      interrupt handling is defensible) or the pruned edge was spurious
+- [ ] **Decide whether the subsystem map is incomplete.** Now urgent, not a
+      footnote: across 92 incidents the statistics accepted 115 pairs and the
+      hand-written map discarded **50 of them (43%)**. It is the largest
+      single filter in the causal pipeline — bigger than FDR correction and
+      the effect-size floor — and it has never been validated against
+      anything
 
 ### ⚠️ Long-run stability
 

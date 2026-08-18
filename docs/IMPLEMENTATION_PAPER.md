@@ -1119,6 +1119,65 @@ the strongest argument in this paper for repeating the evaluation on second
 hardware — not generality for its own sake, but because one measurement is
 unobtainable here at all.
 
+### 8.4.2 Causal yield measured across 92 real incidents
+
+Every causal claim so far rested on two injected faults. The collected history
+contains far more, so the pipeline was run over all of it — no injection, read
+only, `tools/measure_causal_yield.py`. **175 incidents found, 92 analysable,
+1.7 minutes.**
+
+| Outcome | Count | Share |
+|---|---|---|
+| no supported causal chain | 58 | 63.0% |
+| **supported** | **29** | **31.5%** |
+| pruned by topology | 2 | 2.2% |
+| no anomaly detected | 2 | 2.2% |
+| not tested — window too short | 1 | 1.1% |
+
+Three results follow, and two of them change what this paper claims.
+
+**Starvation is confirmed at scale, and quantified.** 83 of 175 incidents —
+**47%** — sit below the Granger floor and cannot be tested at any setting.
+Among those that can be, yield climbs with window width exactly as the CPU
+7-versus-30-minute comparison predicted from a single pair:
+
+| window | n | explained | rate |
+|---|---|---|---|
+| 0–30 min | 48 | 12 | 25% |
+| 30–60 min | 20 | 5 | 25% |
+| 60–120 min | 10 | 5 | **50%** |
+| 120–360 min | 9 | 5 | **56%** |
+| 360 min+ | 5 | 2 | 40% |
+
+The rate doubles once windows pass an hour. The dip in the last row is five
+incidents and should not be read as a trend.
+
+**The subsystem map is doing far more work than anyone knew.** Across all 92
+incidents the statistics accepted **115** pairs after FDR correction and the
+effect-size floor. The hand-written topology map then discarded **50 of them —
+43%.** It intervened in 15 incidents and was the deciding factor in 2.
+
+That reframes §8.3 entirely. The `net_sent_bps → cpu_pct_max_core` prune was
+recorded as a single curious observation; it is in fact one instance of a rule
+that rejects **nearly half** of everything the statistical layer accepts. A
+hand-written map in `dynamic_graph.py`, never validated against anything, is
+the single largest filter in the causal pipeline — larger than multiple-testing
+correction and the effect-size floor, whose rejections it then compounds.
+Whether those 50 pairs were spurious or the map is incomplete is now the most
+consequential open question in this system, and it is no longer a footnote.
+
+**The layer is not as silent as previously described.** Earlier text
+characterised it as producing nothing on the majority of incidents, inferred
+from a handful of cases. Measured, it explains **31.5%** — a minority, but a
+substantial one, and above an hour of window it is a coin flip. Where it does
+explain, the median chain is 2 edges and the leading metric is overwhelmingly
+disk or swap: `disk_busy_pct` (8), `swap_used_delta` (4), `disk_read_bps` (4),
+`disk_free_pct` (3), `swap_used_bytes` (3).
+
+The survey costs nothing to repeat and should be re-run whenever the gates,
+the map, or the model change — it is the only measurement here with a sample
+size worth the name.
+
 ### 8.5 Idle: the false-positive floor
 
 Thirty minutes with nothing injected flagged **1 metric of 29 (3.4%)**,
