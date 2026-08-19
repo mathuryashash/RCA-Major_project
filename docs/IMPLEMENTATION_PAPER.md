@@ -34,8 +34,8 @@ The headline results:
 | Does it detect a known fault? | yes, for CPU and disk | §8.2, §8.3 |
 | Does it name the responsible process? | yes, after a defect that made memory-bound causes unnameable | §8.4 |
 | Does it explain a cause it was not told about? | yes, once, with six causal edges pointing away from CPU | §8.2 |
-| How often does it explain anything? | **31.5%** of analysable incidents | §8.5 |
-| Why does it stay silent so often? | **47%** of incidents fall below the Granger sample floor | §8.5 |
+| How often does it explain anything? | **31.5%** of *analysable* incidents — but **17%** of all incidents found, which is what a user experiences | §8.5 |
+| Why does it stay silent so often? | **47%** fall below the Granger sample floor — an artefact of one default, though lowering it recovers only four explanations in 210 | §8.5, §8.5.1 |
 | What filters the rest? | the statistics accept 115 pairs; 26% are rejected by a hand-written subsystem map, 17% by cycle-breaking | §8.6 |
 | False positives at rest? | 1 metric of 29 over 30 minutes (3.4%) | §8.7 |
 
@@ -1173,13 +1173,30 @@ contains far more, so the pipeline was run over all of it — no injection, read
 only, `tools/measure_causal_yield.py`. **175 incidents found, 92 analysable,
 1.7 minutes.**
 
-| Outcome | Count | Share |
+| Outcome | Count | Share of analysable |
 |---|---|---|
 | no supported causal chain | 58 | 63.0% |
 | **supported** | **29** | **31.5%** |
 | pruned by topology | 2 | 2.2% |
 | no anomaly detected | 2 | 2.2% |
 | not tested — window too short | 1 | 1.1% |
+
+**Quote the funnel, not the survivors.** 31.5% is the share of incidents that
+were *analysable*, which is the flattering denominator and not the one a user
+lives in:
+
+```
+incidents the detector found        175   100%
+...long enough for Granger           92    53%
+...that produced any causal edge     29    17%
+```
+
+**One in six.** Someone who sees an incident has roughly a 17% chance of
+getting any causal explanation at all. Earlier revisions of this paper, and its
+abstract, quoted 31.5% without the denominator; that is corrected here and
+there. "Supported" also means only that at least one edge survived — the survey
+has no ground truth, so it is a ceiling on usefulness rather than a measure of
+correctness.
 
 Three results follow, and two of them change what this paper claims.
 
@@ -1215,6 +1232,64 @@ disk or swap: `disk_busy_pct` (8), `swap_used_delta` (4), `disk_read_bps` (4),
 The survey costs nothing to repeat and should be re-run whenever the gates,
 the map, or the model change — it is the only measurement here with a sample
 size worth the name.
+
+### 8.5.1 The sample floor is a parameter artefact — and removing it recovers little
+
+The 47% figure above invites an obvious reading: incidents are too short, the
+data are thin, nothing can be done. That reading is wrong on the mechanism and,
+it turns out, also wrong about the remedy.
+
+**Where the cliff comes from.** A detector-flagged run can be as short as three
+samples, so the pipeline widens it before offering it for analysis — to exactly
+the model's window size, **15 samples**. Granger at the default lag of 5 needs
+`3L + 2` = **17**. Two constants chosen independently in the same pipeline, and
+the widening target lands two samples under the causal floor. The incident
+duration distribution has a hard spike at 7.0 minutes for precisely this reason:
+p10 and p25 are both exactly 7.0, which is 15 samples at a 30-second cadence.
+
+The cliff is therefore an artefact of one default, not a property of the data:
+
+```
+lag 2  floor  4.0 min  ->  202/202 testable (100%)
+lag 3  floor  5.5 min  ->  202/202 testable (100%)
+lag 4  floor  7.0 min  ->  202/202 testable (100%)
+lag 5  floor  8.5 min  ->  107/202 testable ( 53%)   <- the default
+```
+
+**What removing it actually buys.** The survey was re-run end to end at lags 3,
+4 and 5 on an identical 210-incident population, which is the measurement that
+settles it:
+
+| lag | testable | explained | of all incidents | median edges | max edges |
+|---|---|---|---|---|---|
+| 3 | 210 | 32 | 15.2% | 1 | 11 |
+| 4 | 210 | 34 | 16.2% | 1 | 13 |
+| **5** | **113** | **30** | **14.3%** | **2** | **7** |
+
+Lowering the lag to 4 makes *every* incident testable — 113 to 210, nearly
+double — and yields **four more explanations**. The incidents hidden below the
+floor were overwhelmingly ones that produce nothing when tested. The hypothesis
+that a parameter mismatch was concealing recoverable insight is measured and
+mostly false.
+
+There is also a cost that runs the other way. Median surviving edges falls from
+**2 to 1** while the maximum rises from 7 to 13: shorter lags admit more
+relationships, and the ones they admit are shallower. Accepted pairs rise from
+116 to 130 and the topology map's rejections rise with them, 50 to 60 — the
+extra findings are not obviously better findings.
+
+**So the honest gain is in reporting, not in insight.** At lag 5, 47% of
+incidents are reported as "not tested — window too short", which tells a user
+nothing about their machine and everything about a constant they cannot see. At
+lag 4 those same incidents return "tested, nothing survived", which is a real
+negative result. The user learns no more about the cause either way, but one
+answer is evasive and the other is not — and this project has spent most of its
+later effort on exactly that distinction.
+
+The default is left at 5 pending a decision, because the trade is genuine:
+richer chains and an evasive silence, against flatter chains and an honest one.
+What is no longer defensible is describing the floor as thin data. It is a
+constant sitting one notch above a length the pipeline manufactures for itself.
 
 ### 8.6 Population evidence: auditing the subsystem map
 
@@ -1585,9 +1660,11 @@ Ordered by how much they constrain what this system can claim.
 
 **Method**
 
-4. **47% of incidents fall below the Granger floor** and cannot be tested at
-   any setting. This is the dominant limit on causal yield, and it is a
-   consequence of `N ≥ 3L + 2` meeting real incident durations.
+4. **47% of incidents fall below the Granger floor at the default lag** —
+   an artefact of the pipeline widening short incidents to 15 samples while
+   the causal layer needs 17, not a property of the data. Measured, lowering
+   the lag makes every incident testable and recovers four explanations in
+   210, so the gain is honest reporting rather than insight (§8.5.1).
 5. **The subsystem map is a strict total order** in which `network` is a sink,
    and it forbids three mechanisms that demonstrably exist (§8.6). Adding the
    reverse edges makes the graph cyclic, where cycle-breaking already removes
