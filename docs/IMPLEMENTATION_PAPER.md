@@ -12,30 +12,58 @@ LocalRCA is a Windows desktop application that continuously records system
 telemetry on a single machine, learns that machine's normal behaviour with an
 LSTM autoencoder, and — after an incident — attempts to explain what went
 wrong using constrained Granger causality over the anomalous metrics. It runs
-entirely on the endpoint: no telemetry leaves the machine, and the system
-makes no network connections.
+entirely on the endpoint: no telemetry leaves the machine, and the system makes
+no network connections.
 
 This paper documents what was built, what was measured, and where the
-measurements contradict the design's assumptions. It is written from
-instrumented runs on a live installation, not from intended behaviour.
+measurements contradict the design's assumptions. Every figure comes from
+instrumented runs on a live installation. Where a result is unflattering, or
+where a claim made earlier in this document turned out to be wrong, both are
+recorded in place rather than revised away.
 
-The revision of 2026-08-12 adds the first **fault-injection evaluation**, which
-the original draft listed as the single most important missing piece. Six
-controlled runs are reported. A 30-minute CPU burn was detected, correctly
-attributed, and — for the first time in this project — **correctly explained**:
-the ranking named `cpu_pct` first with six surviving causal edges pointing away
-from CPU. A 30-minute disk burn was detected and correctly ranked but produced
-**no causal chain at all**, for a reason that turned out to be a subsystem
-topology constraint rather than a statistical one. A 30-minute memory hold was
-detected and then **attributed to four processes that had nothing to do with
-it**, exposing a defect that made memory-bound causes unnameable by
-construction; re-run after the fix, the same fault was attributed correctly. A
-30-minute idle run flagged 1 metric of 29.
+**Evaluation is in two parts.** Seven controlled fault injections establish
+whether the system detects, attributes and explains a disturbance whose cause
+is known in advance. A population survey then runs the full pipeline over
+**175 incidents discovered in real collected history**, of which 92 are long
+enough to test, converting claims that rested on single runs into rates.
 
-Several of the most useful results remain negative, and they are reported as
-such. The causal layer is now known to have been *starved* rather than broken —
-a distinction established by running the same fault at two window widths — and
-collection coverage remains the dominant limiting factor.
+The headline results:
+
+| Question | Answer | Evidence |
+|---|---|---|
+| Does it detect a known fault? | yes, for CPU and disk | §8.2, §8.3 |
+| Does it name the responsible process? | yes, after a defect that made memory-bound causes unnameable | §8.4 |
+| Does it explain a cause it was not told about? | yes, once, with six causal edges pointing away from CPU | §8.2 |
+| How often does it explain anything? | **31.5%** of analysable incidents | §8.5 |
+| Why does it stay silent so often? | **47%** of incidents fall below the Granger sample floor | §8.5 |
+| What filters the rest? | the statistics accept 115 pairs; 26% are rejected by a hand-written subsystem map, 17% by cycle-breaking | §8.6 |
+| False positives at rest? | 1 metric of 29 over 30 minutes (3.4%) | §8.7 |
+
+**Two findings reframe the design.** The causal layer was long described as
+near-silent; measured, it explains a third of what it can test, and yield
+doubles from 25% to above 50% once analysis windows exceed an hour. It was
+never broken — it was **starved**, and the fix is operational rather than
+architectural. Separately, the subsystem map that encodes prior knowledge
+about how a laptop behaves turns out to be a strict total order in which
+`network` is a pure sink; it forbids `network → disk`, `disk → memory` and
+`disk → cpu`, three mechanisms that demonstrably exist, and discards the
+single strongest relationship the system has ever measured.
+
+**A recurring failure mode is documented as a result in its own right.** Nine
+defects were found in code that had a passing test suite around it, and in
+almost every case the test asked a question adjacent to the one that mattered
+— the SQL value instead of the bytes on disk, the main file instead of the
+full footprint, the function instead of the path that calls it. Two fixes were
+worse than the defects they repaired, one of which doubled disk usage while
+claiming to bound it. They were caught by adversarial review rather than by
+more testing, and §10.5 argues why.
+
+The engineering is sound where it has been measured, and the application runs:
+a packaged build was launched and observed responding with memory plateauing at
+511 MB, and the pipeline processed 92 real incidents end to end in 1.7 minutes.
+What prevents wide distribution is not code but procurement and product
+decisions — the binaries are unsigned, there is no update mechanism, and the
+no-egress promise is irreconcilable with crash reporting.
 
 ---
 
@@ -872,15 +900,34 @@ multi-day window is the outstanding item.
 
 ## 8. Evaluation
 
-The original draft's §5.3 stated that no measurement of detection quality
-existed anywhere in the work, and named fault injection as the remedy. That
-harness now exists as `tools/evaluate_detection.py`: it causes a known
-disturbance, waits for the samples to land, runs the real pipeline over the
-injection window, and scores what came back.
+The original draft stated that no measurement of detection quality existed
+anywhere in the work, and named fault injection as the remedy. Evaluation now
+proceeds on two levels, which answer different questions and have different
+weaknesses.
 
-It manufactures the ground truth that a personal machine cannot otherwise
-provide. It is not a unit test — it needs the collector running and takes tens
-of minutes, because it must wait for real samples at the real cadence.
+**Fault injection** (`tools/evaluate_detection.py`) manufactures the ground
+truth a personal machine cannot otherwise provide: cause a specific known
+disturbance, wait for the samples to land, run the real pipeline over the
+injection window, and score what came back. It is the only way to ask *"is the
+answer correct"*, because only here is the answer known in advance. It is also
+expensive — the collector must be running and each run takes tens of minutes at
+the real sampling cadence — so it yields single observations, and a single
+observation cannot distinguish a property of the system from an accident of the
+run.
+
+**Population survey** (`tools/measure_causal_yield.py`,
+`tools/audit_topology_map.py`) runs the same pipeline over every incident the
+detector finds in real collected history — 175 of them, 92 long enough to test
+— in under two minutes, with no injection and no privileges. It cannot say
+whether any individual answer is right, because nothing here has a known cause.
+What it gives instead is *rates*: how often the causal layer produces anything,
+how that varies with window width, and which filter removes what. Several
+claims in earlier revisions of this paper rested on one or two runs and are
+corrected below by numbers with a sample size.
+
+The two are complementary and neither substitutes for the other. Injection
+establishes correctness on a handful of cases; the survey establishes frequency
+across many. §8.2 to §8.4 report the injections, §8.5 and §8.6 the survey.
 
 ### 8.1 Results
 
@@ -1119,7 +1166,7 @@ the strongest argument in this paper for repeating the evaluation on second
 hardware — not generality for its own sake, but because one measurement is
 unobtainable here at all.
 
-### 8.4.2 Causal yield measured across 92 real incidents
+### 8.5 Population evidence: causal yield across 92 real incidents
 
 Every causal claim so far rested on two injected faults. The collected history
 contains far more, so the pipeline was run over all of it — no injection, read
@@ -1154,7 +1201,7 @@ incidents and should not be read as a trend.
 
 **The subsystem map is doing far more work than anyone knew.** Across all 92
 incidents the statistics accepted **115** pairs after FDR correction and the
-effect-size floor, and only **65 (57%)** reached the final graph. §8.4.3 breaks
+effect-size floor, and only **65 (57%)** reached the final graph. §8.6 breaks
 down what removed the other 50, and audits whether it should have.
 
 **The layer is not as silent as previously described.** Earlier text
@@ -1169,7 +1216,7 @@ The survey costs nothing to repeat and should be re-run whenever the gates,
 the map, or the model change — it is the only measurement here with a sample
 size worth the name.
 
-### 8.4.3 Auditing the subsystem map
+### 8.6 Population evidence: auditing the subsystem map
 
 The first attempt at this measurement got the attribution wrong, and the error
 is worth stating because it is the same shape as the others in this paper. The
@@ -1252,7 +1299,7 @@ finding is narrower and firmer: **the prior it encodes forbids mechanisms that
 demonstrably exist, and one of them accounts for the strongest relationship
 this system has ever measured.**
 
-### 8.5 Idle: the false-positive floor
+### 8.7 Idle: the false-positive floor
 
 Thirty minutes with nothing injected flagged **1 metric of 29 (3.4%)**,
 `mem_available_mb`, with Windows Search indexing visible in the process
@@ -1266,7 +1313,7 @@ load, 2 of 29 under memory load, 1 of 29 at rest — the detector
 set at 7.0%, just above the measured floor; tightening it further would fail on
 real OS activity.
 
-### 8.6 What this evaluation still does not establish
+### 8.8 What this evaluation still does not establish
 
 Six runs on **one machine**. The following remain undone and are not claimed:
 
@@ -1282,7 +1329,7 @@ Six runs on **one machine**. The following remain undone and are not claimed:
 
 The honest claim is **"demonstrated once"**, not "validated".
 
-### 8.7 What the harness is actually for
+### 8.9 What the harness is actually for
 
 The evaluation's most valuable output has not been a pass. Of six runs, one
 explained a fault end to end, one showed the causal layer being starved rather
@@ -1409,7 +1456,7 @@ at 2 GB.
 
 ---
 
-## 10.4 A security and storage audit, including what it got wrong
+### 10.4 A security and storage audit, including what it got wrong
 
 A full-codebase audit was run against the shipped 1.2.1 build. Its most useful
 output was a finding that **did not survive checking**.
@@ -1469,7 +1516,7 @@ test that fails if a locked database is ever quarantined.
 
 ---
 
-## 10.5 What adversarial review caught that testing did not
+### 10.5 What adversarial review caught that testing did not
 
 Two reviewers were pointed at the previous section's changes with one
 instruction: this project has a documented history of fixes that pass their
@@ -1518,74 +1565,133 @@ was asked to assume the fix was wrong rather than to confirm it was right.
 
 ## 11. Limitations
 
-1. **Collection coverage of 27.8%** with a median segment of 17 samples —
-   exactly the Granger floor. Everything downstream inherits this. The figure
-   predates supervision and has not been re-measured.
-2. **Evaluation is six runs on one machine.** No fault has been tested whose
-   cause is not also the most severe metric, so a correct causal answer and a
-   correct severity answer are not yet distinguishable.
-3. **Causal inference frequently produces no edge** at the window sizes real
-   incidents present. The statistical gates are correct; the data are thin.
-4. **The subsystem topology is hand-written and asymmetric**, and has been
-   measured discarding the only surviving edge in a run. Whether the map is
-   incomplete or the edge was spurious is unresolved.
-5. **`model_stale` conflates** a stale model with an old analysis window.
-6. **Unsigned distribution, 1,109 MB**, with no update mechanism and no path
-   for a crash report to reach the developer — the latter arguably
-   irreconcilable with the no-egress promise.
-7. **Storage retention is implemented but unobserved.** Metric history now
-   expires at 365 days and freed space is returned to the filesystem, but the
-   installation is younger than the shortest retention window, so no purge has
-   ever run outside a test; see §6.3.1.
-8. **The focus record now expires at 30 days**, but no purge has yet run on
-   the development machine, so this shares the unobserved status of item 7.
-9. **Single-machine scope.** Nothing correlates across machines, by design.
-10. **Untested at non-100% DPI and on small screens.** A design review scored
-    the interface 3/10 for accessibility; keyboard focus and accessible names
-    are fixed, but contrast on structural borders (1.28:1 on `BORDER`, 1.17:1
-    on gridlines) still fails WCAG SC 1.4.11, and nothing has been tried with
-    a real screen reader.
+Ordered by how much they constrain what this system can claim.
 
----
+**Evidence**
+
+1. **Everything is one machine.** Seven injections and a 92-incident survey,
+   all from a single Windows 11 host. Nothing here establishes generality, and
+   one measurement — memory detection — is provably *unobtainable* on this
+   host (§8.4.1), which makes second hardware a prerequisite rather than a
+   nicety.
+2. **No fault has been tested whose cause is not also the loudest metric.**
+   Both explaining runs put the injected fault at the top of a severity
+   ranking, so a correct causal answer and a correct severity answer remain
+   indistinguishable. The memory route to testing this is closed on this
+   machine; `process_count` is the best remaining candidate.
+3. **The survey measures frequency, not correctness.** Its 92 incidents have
+   no known cause, so a 31.5% explanation rate says how often the layer speaks,
+   never whether it is right.
+
+**Method**
+
+4. **47% of incidents fall below the Granger floor** and cannot be tested at
+   any setting. This is the dominant limit on causal yield, and it is a
+   consequence of `N ≥ 3L + 2` meeting real incident durations.
+5. **The subsystem map is a strict total order** in which `network` is a sink,
+   and it forbids three mechanisms that demonstrably exist (§8.6). Adding the
+   reverse edges makes the graph cyclic, where cycle-breaking already removes
+   17% of accepted pairs — the two filters would begin to fight. Unresolved by
+   design rather than by neglect.
+6. **`model_stale` conflates** a stale model with an old analysis window.
+7. **Collection coverage was 27.8%** with a median segment of exactly the
+   Granger floor. The figure predates supervision and has not been re-measured.
+
+**Unobserved in production**
+
+8. **Retention has never actually run.** Metric history expires at 365 days,
+   the focus record at 30, and freed space is returned to the filesystem — all
+   unit-tested, none observed, because the installation is younger than the
+   shortest window (§6.3.1).
+9. **Schema migration has never been exercised.** `SCHEMA_VERSION` has stood
+   at 1 for the life of the project.
+
+**Distribution**
+
+10. **Unsigned**, confirmed `NotSigned`, so every user meets a SmartScreen
+    warning on a 433 MB download from an unknown publisher. This is the single
+    largest barrier to distribution and it is not an engineering problem.
+11. **No update mechanism.** A defect shipped is a defect that stays, which
+    given the defect rate documented in §10 is the risk worth weighing most.
+12. **No crash reporting, irreconcilably.** `desktop.log` never leaves the
+    machine, and cannot without breaking the promise the design is built on.
+
+**Interface**
+
+13. **Contrast on structural borders fails WCAG SC 1.4.11** — 1.32:1 on
+    `BORDER`, 1.07:1 on row striping. Text contrast passes comfortably; it is
+    the frames and gridlines that are nearly invisible.
+14. **Untested at non-100% DPI, on small screens, and with a screen reader.**
+    Keyboard focus is now verified on all eight focusable control types by
+    rendering, but nothing has been tried with assistive technology.
+15. **The first day is empty.** Roughly 21 hours of clean collection are
+    required before training unlocks, and the application offers nothing to do
+    meanwhile — no sample dataset, no preview.
 
 ## 12. Conclusion
 
-The engineering is sound in the parts that were measured: collection is cheap,
-training completes in under a minute, the collector is now supervised and
+The engineering is sound where it has been measured. Collection is cheap,
+training completes in under a minute, the collector is supervised and
 demonstrably restarts, the packaging failures are understood with one honest
-exception, and the privacy claim — no network code anywhere in the source —
-holds structurally.
+exception, and the privacy claim holds structurally rather than by policy —
+there is no network code anywhere in the source. The application runs: a
+packaged build was launched and observed responding with memory plateauing at
+511 MB, and the pipeline processed 92 real incidents end to end in 1.7 minutes.
 
-The analytical claims were originally weaker than the interface suggested, and
-the substantive contribution of the later work was making the system say so.
-That work now has evidence behind it rather than only an argument. A 30-minute
-CPU burn was detected, attributed, and explained, with six causal edges
-pointing away from the injected cause. The same fault at 7 minutes tested
-nothing and reported exactly that. **The causal layer was starved, not
-broken**, and knowing which of those it was changes the remedy from redesign to
-window width.
+**On the analytical claims, the picture is now quantified rather than
+argued.** The causal layer explains 31.5% of the incidents it can test, and
+yield doubles once windows exceed an hour. It was never broken; it was
+starved, and the remedy is window width rather than redesign. That was first
+suspected from one pair of runs at 7 and 30 minutes, and it is the survey
+across 92 incidents that turned a plausible story into a rate.
 
-**The runs that failed were worth more than the one that succeeded.** The disk
-run got the right answer for a reason it was not entitled to claim, and the
-report said so — exposing, in the process, that a topology decision was being
-reported as a statistical one. The memory run went further: it detected the
-fault and named four innocent processes, because attribution ranked by CPU and
-a sleeping allocator has none. That defect had been in production for the
-project's entire life and was invisible to every prior test, because the CPU
-and disk faults are both CPU-heavy and attributed correctly by accident of
-their shape. The harness scored that run PASS, which was a second defect, and
-the checklist had been claiming attribution was verified on the strength of it.
+**The most consequential finding was not about the model at all.** The
+subsystem map — fifteen lines encoding intuition about how a laptop behaves —
+rejects a quarter of everything the statistics accept, and is a strict total
+order in which `network` is a sink. It forbids `network → disk`, `disk →
+memory` and `disk → cpu`: a download writing to disk, a file cache consuming
+memory, interrupt handling costing CPU. All three exist. One of them accounts
+for the strongest relationship this system has ever measured. The map is not
+wrong so much as one-directional — it models pressure flowing downhill and has
+no vocabulary for the feedback that makes I/O expensive — and correcting it is
+a design question about representing cycles, not a patch.
 
-The lesson generalises past this project. Four runs were chosen to be unlike
-their predecessors — a wider window, a different subsystem, a fault with no CPU
-signature, and a repeat after a fix — and those four are the ones that found
-something. A test suite that only exercises the shape of fault it was designed
-against measures its own assumptions.
+**The failures were worth more than the successes, and there is a pattern to
+why.** Nine defects were found in code with a passing test suite around it.
+Attribution ranked by CPU, so a sleeping allocator could never be named — in
+production for the project's entire life, invisible because the CPU and disk
+faults are both CPU-heavy and attributed correctly by accident of their shape.
+A storage fix doubled disk usage while claiming to bound it, and its test
+concealed that with a checkpoint the application never issues. A memory
+injection was scored FAIL when the truth was that a bounded injection cannot
+exceed normal usage on a habitually-full host, so the test was unanswerable
+rather than the product broken.
 
-One success is not a measurement. The remaining work is not a better model: it
-is collector supervision measured over a fresh multi-day window, a fault whose
-cause is not the loudest signal, and repeats on hardware that is not this
-laptop.
+In almost every case the test asked a question *adjacent* to the one that
+mattered: the SQL value instead of the bytes on disk, the main file instead of
+the full footprint, the function instead of the path that calls it, the
+stylesheet instead of the rendered pixels. More tests would not have helped.
+Adversarial review — being asked to assume the fix was wrong rather than to
+confirm it was right — found five in a single pass.
+
+**What would change the conclusions.** Running the evaluation on second
+hardware, because one measurement is provably unobtainable here. Testing a
+fault whose cause is not also the loudest metric, because nothing yet
+distinguishes a correct causal answer from a correct severity answer. And
+observing a retention purge actually run, because everything about bounded
+storage is currently unit-tested and unwitnessed.
+
+**What would make it shippable** is not engineering. The binaries are
+unsigned, so every user meets a SmartScreen warning; there is no update
+mechanism, so a defect shipped is permanent; and crash reports cannot reach
+anyone without breaking the promise the system is built on. Those are a
+purchase and two product decisions.
+
+The most durable result here is methodological. A tool that reports "no causal
+chain was supported" when the data cannot support one is more useful than a
+confident ranking that changes with the window — and the work of making it say
+so, honestly and in the place users actually read, was larger than the work of
+making it compute an answer in the first place.
 
 ---
 
@@ -1637,7 +1743,7 @@ training run on the host machine.
   reported because none was measured.
 - In both explaining runs the injected fault was also the highest-severity
   metric, so the evaluation **cannot separate** a correct causal ranking from a
-  correct severity ranking. §8.6 states this as the most important gap.
+  correct severity ranking. §8.8 states this as the most important gap.
 - The attribution fix is verified by **re-running the analysis over the stored
   incident window**, not by a fresh injection. Nothing here shows it holding
   end to end on a live fault.
