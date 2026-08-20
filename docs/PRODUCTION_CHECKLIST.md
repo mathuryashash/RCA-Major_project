@@ -260,7 +260,12 @@ published SHA256.
       size shift, and the test fails if either rule is removed
 - [ ] **Keyboard navigation** — tab order, Enter to activate, Esc to cancel
 - [ ] **Screen reader labels** on controls and figures
-- [ ] Contrast audit against WCAG AA
+- [x] **Contrast audit** — text was never the problem (body 14.64:1); the
+      structure around it was. `BORDER` rendered at **1.32:1** and is now
+      **3.07:1**, clearing SC 1.4.11 for non-text contrast, with gridlines and
+      row striping raised for readability. Striping deliberately claims no
+      compliance: it is decorative and a table reads without it. Pinned by a
+      test that recomputes the ratio from the palette
 
 ### ❌ Settings persistence
 

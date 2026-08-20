@@ -1,5 +1,7 @@
 import os
 import sys
+import pathlib
+
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -799,3 +801,52 @@ def test_the_window_can_render_at_the_minimum_size_it_declares(qtbot):
         assert hasattr(page, "setWidgetResizable"), (
             f"tab {index} ({window.tabs.tabText(index)}) is not scrollable"
         )
+
+
+def _contrast(colour_a: str, colour_b: str) -> float:
+    """WCAG relative-luminance contrast ratio between two hex colours."""
+    def channel(value: float) -> float:
+        value /= 255
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+
+    def luminance(hex_colour: str) -> float:
+        h = hex_colour.lstrip("#")
+        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+        return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+    first, second = luminance(colour_a), luminance(colour_b)
+    return (max(first, second) + 0.05) / (min(first, second) + 0.05)
+
+
+def _composite(foreground: str, alpha: float, background: str) -> str:
+    f, b = foreground.lstrip("#"), background.lstrip("#")
+    return "#%02x%02x%02x" % tuple(
+        round(int(f[i:i + 2], 16) * alpha + int(b[i:i + 2], 16) * (1 - alpha))
+        for i in (0, 2, 4)
+    )
+
+
+def test_structural_borders_meet_wcag_non_text_contrast():
+    """SC 1.4.11: boundaries of user interface components need 3:1.
+
+    Text contrast was never the problem in this theme — body text sits at
+    14.64:1 — but every frame, input outline and table border rendered at
+    1.32:1, which is very nearly invisible. A design review scored the
+    interface 3/10 for accessibility largely on this.
+
+    Row striping is deliberately excluded: alternating row colours are
+    decorative, a table is readable without them, and claiming compliance for
+    them would be overreach in the opposite direction.
+    """
+    import re
+
+    from desktop import theme
+
+    alpha = float(re.search(r"BORDER\s*=\s*\"rgba\([^)]*,\s*([\d.]+)\)", 
+                            pathlib.Path(theme.__file__).read_text(encoding="utf-8")).group(1))
+    border = _composite("#f0f6fc", alpha, theme.SURFACE)
+    ratio = _contrast(border, theme.SURFACE)
+    assert ratio >= 3.0, f"BORDER renders at {ratio:.2f}:1 against SURFACE, needs 3.0"
+
+    # And the thing that was always fine must stay fine.
+    assert _contrast(theme.TEXT, theme.SURFACE) >= 4.5

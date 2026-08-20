@@ -14,7 +14,17 @@ tool whose value is the data on screen.
 BG          = "#0d1117"   # app background
 SURFACE     = "#161b22"   # panes, tables
 SURFACE_ALT = "#1c2128"   # group boxes, headers
-BORDER      = "rgba(240, 246, 252, 0.10)"
+# 0.35, not 0.10. Composited over SURFACE this is #62686e at 3.07:1, which
+# clears WCAG SC 1.4.11 for non-text contrast; the old value rendered at
+# 1.32:1, so every frame, input outline and table border in the application
+# was very nearly invisible. Text contrast was never the problem here -- body
+# text sits at 14.64:1 -- it was the structure around it.
+BORDER      = "rgba(240, 246, 252, 0.35)"
+# Cell separators in a data table carry meaning, so they get most of the way
+# there too. Row striping below is decorative and deliberately does not claim
+# compliance: a table is readable without it.
+GRIDLINE    = "rgba(240, 246, 252, 0.22)"
+ROW_ALT     = "#232a33"
 TEXT        = "#e6edf3"
 TEXT_MUTED  = "#8b949e"
 
@@ -159,8 +169,8 @@ QProgressBar::chunk {{
 
 QTableWidget {{
     background-color: {SURFACE};
-    alternate-background-color: {SURFACE_ALT};
-    gridline-color: rgba(240, 246, 252, 0.06);
+    alternate-background-color: {ROW_ALT};
+    gridline-color: {GRIDLINE};
     border: 1px solid {BORDER};
     border-radius: {RADIUS};
 }}
