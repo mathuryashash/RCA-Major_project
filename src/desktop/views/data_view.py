@@ -2,12 +2,13 @@
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QFormLayout, QGroupBox, QHeaderView, QLabel, QPushButton, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from telemetry import config
+from telemetry import config, schedule
 from telemetry.analysis import MODELLED_COLUMNS, store_summary
+from telemetry.collector import request_stop
 
 #: column -> (group, human label, unit). Order here is the display order.
 CHANNELS = [
@@ -98,16 +99,69 @@ class DataView(QWidget):
         channel_box.setLayout(channel_layout)
         layout.addWidget(channel_box, stretch=1)
 
+        # An off switch. Recording which applications someone uses, every 30
+        # seconds, with no way to stop short of uninstalling is not a defensible
+        # position for a tool whose case rests on privacy. The mechanism already
+        # existed -- the collector and the supervisor both poll a stop flag --
+        # it had simply never been offered to the person being recorded.
+        controls = QHBoxLayout()
+        self.pause_button = QPushButton("Pause collection")
+        self.pause_button.setAccessibleName("Pause or resume telemetry collection")
+        self.pause_button.clicked.connect(self._toggle_collection)
+        self.collection_state = QLabel("")
+        self.collection_state.setWordWrap(True)
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh)
-        layout.addWidget(self.refresh_button)
+        controls.addWidget(self.pause_button)
+        controls.addWidget(self.refresh_button)
+        controls.addWidget(self.collection_state, stretch=1)
+        layout.addLayout(controls)
 
         self.refresh()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
         self._timer.start(30_000)
 
+    def _toggle_collection(self):
+        """Stop or restart collection, and say what actually happened.
+
+        Pausing is not instant: the collector polls the flag once per
+        thirty-second cycle, so telling the user it has stopped the moment the
+        button is clicked would be a small lie of exactly the kind this
+        project spends its effort removing.
+        """
+        try:
+            if schedule.collection_paused():
+                schedule.resume_collection()
+            else:
+                request_stop()
+        except Exception as exc:  # noqa: BLE001 - the view must survive either way
+            self.collection_state.setText(f"Could not change collection: {exc}")
+            return
+        self._refresh_collection_state(just_toggled=True)
+
+    def _refresh_collection_state(self, just_toggled: bool = False):
+        try:
+            paused = schedule.collection_paused()
+        except Exception:  # noqa: BLE001
+            return
+        self.pause_button.setText("Resume collection" if paused else "Pause collection")
+        if paused:
+            self.collection_state.setText(
+                "Paused. The collector stops within about 30 seconds and stays "
+                "stopped across restarts until you resume. Data already "
+                "collected is kept."
+                if just_toggled else
+                "Collection is paused. Nothing new is being recorded."
+            )
+        else:
+            self.collection_state.setText(
+                "Collecting. Resumed under the supervisor." if just_toggled
+                else "Collecting every 30 seconds."
+            )
+
     def refresh(self):
+        self._refresh_collection_state()
         try:
             summary = store_summary()
         except Exception as exc:  # noqa: BLE001 - a locked or busy database must not stop the view

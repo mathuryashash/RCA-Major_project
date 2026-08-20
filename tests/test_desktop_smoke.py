@@ -710,3 +710,60 @@ def test_every_focusable_control_shows_a_focus_indicator(qtbot):
                    QPushButton("Run RCA")):
         name = type(widget).__name__
         assert changed_pixels(widget) > 0, f"{name} draws no focus indicator"
+
+
+def test_collection_can_be_paused_and_resumed_from_the_interface(qtbot, tmp_path, monkeypatch):
+    """A tool that records which applications you use needs an off switch.
+
+    The mechanism already existed -- collector and supervisor both poll a stop
+    flag -- but it was only reachable by uninstalling, which is not a
+    defensible position for software whose case rests on privacy.
+    """
+    from telemetry import config, schedule
+    from desktop.views.data_view import DataView
+
+    monkeypatch.setattr(config, "app_dir", lambda: tmp_path)
+    monkeypatch.setattr(config, "db_path", lambda: tmp_path / "telemetry.db")
+    resumed = []
+    monkeypatch.setattr(schedule, "resume_collection",
+                        lambda: (resumed.append(1), config.stop_flag_path().unlink(missing_ok=True))[0])
+
+    view = DataView()
+    qtbot.addWidget(view)
+    assert not schedule.collection_paused()
+    assert view.pause_button.text() == "Pause collection"
+
+    view._toggle_collection()
+    assert schedule.collection_paused(), "a stop must actually be requested"
+    assert config.stop_flag_path().exists()
+    assert view.pause_button.text() == "Resume collection"
+    assert "30 seconds" in view.collection_state.text(), (
+        "the delay before collection really stops must be stated, not glossed"
+    )
+
+    view._toggle_collection()
+    assert resumed, "resuming must go through the supervisor-aware path"
+    assert not schedule.collection_paused()
+    assert view.pause_button.text() == "Pause collection"
+
+
+def test_resuming_restores_supervision_not_just_the_collector(tmp_path, monkeypatch):
+    """Pausing ends the supervisor loop as well as the collector.
+
+    Resuming with start_now() alone would bring collection back unsupervised
+    until the next logon -- working, but quietly weaker than before the pause.
+    """
+    from telemetry import config, schedule
+
+    monkeypatch.setattr(config, "app_dir", lambda: tmp_path)
+    script = tmp_path / "supervise.ps1"
+    script.write_text("# supervisor")
+    config.stop_flag_path().touch()
+
+    launched = {}
+    monkeypatch.setattr(schedule.subprocess, "Popen",
+                        lambda argv, **kw: launched.setdefault("argv", argv))
+
+    assert schedule.resume_collection() is True
+    assert not config.stop_flag_path().exists(), "the flag must be lifted"
+    assert "supervise.ps1" in " ".join(launched["argv"]), launched["argv"]

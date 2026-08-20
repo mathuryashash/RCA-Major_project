@@ -171,8 +171,17 @@ a process-sampling burst rather than steady state.
 
 - [ ] Profile over an hour, separating idle cadence from burst sampling
 - [ ] Throttle or pause on battery
-- [ ] Add a visible pause control — there is currently no way to stop
-      collection short of uninstalling
+- [x] **Add a visible pause control** — a tool that records which
+      applications you use every 30 seconds had no off switch short of
+      uninstalling, which is not a defensible position for software whose case
+      rests on privacy. The mechanism already existed: collector and
+      supervisor both poll a stop flag, it had simply never been offered to
+      the person being recorded. Verified against the live system, not mocks —
+      collector 288624 exited on the flag, `resume_collection()` cleared it and
+      relaunched under the supervisor as 201120. Resuming deliberately restores
+      *supervision*, not just the collector: pausing ends the supervisor loop
+      too, so a naive resume would leave collection unsupervised until the next
+      logon
 - [x] **Cap database growth** — metric history now expires at 365 days
       (matching the event window, so an Event Log fault always has telemetry
       left to explain it), and `VACUUM` returns freed space to the filesystem

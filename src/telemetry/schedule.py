@@ -355,6 +355,39 @@ def is_registered() -> bool:
     return _shortcut_path().exists()
 
 
+def collection_paused() -> bool:
+    """Whether a stop has been requested and not yet lifted."""
+    return config.stop_flag_path().exists()
+
+
+def resume_collection() -> bool:
+    """Lift a pause, restoring supervision rather than just the collector.
+
+    The stop flag is honoured by the supervisor as well as the collector, so
+    pausing ends the supervisor's loop. Resuming with `start_now()` alone
+    would bring collection back unsupervised until the next logon -- working,
+    but quietly weaker than before the pause, which is the kind of silent
+    degradation this project keeps finding in its own fixes.
+    """
+    config.stop_flag_path().unlink(missing_ok=True)
+
+    script = supervisor_path()
+    if not script.exists():
+        return start_now()                  # source checkout: nothing to supervise
+    try:
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-WindowStyle", "Hidden", "-File", str(script)],
+            shell=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError:
+        return start_now()
+    return True
+
+
 def start_now(command: str | None = None) -> bool:
     """Launch the collector immediately, detached from this console."""
     # A caller-supplied string still goes through the shell, since that is what
