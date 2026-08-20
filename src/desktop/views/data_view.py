@@ -80,6 +80,10 @@ class DataView(QWidget):
         ):
             self.labels[key] = QLabel("—")
             self.labels[key].setTextInteractionFlags(Qt.TextSelectableByMouse)
+            # Retention and the database path are long single lines; without
+            # wrapping they forced a horizontal scrollbar across the whole tab.
+            self.labels[key].setWordWrap(True)
+            self.labels[key].setMinimumWidth(1)
             form.addRow(caption, self.labels[key])
         store_box.setLayout(form)
         layout.addWidget(store_box)

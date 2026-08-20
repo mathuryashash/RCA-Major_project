@@ -1,7 +1,8 @@
 """Main window — tab shell wiring Stage 1 and Stage 2 views together."""
 
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QTabWidget, QLabel, QHBoxLayout, QVBoxLayout, QWidget,
+    QApplication, QMainWindow, QScrollArea, QTabWidget, QLabel, QHBoxLayout,
+    QVBoxLayout, QWidget,
 )
 
 from desktop.branding import app_icon
@@ -17,6 +18,15 @@ MINIMUM_SIZE = (1024, 640)
 
 #: Comfortable on a large display without swallowing the whole desktop.
 PREFERRED_SIZE = (1500, 950)
+
+
+def _scrollable(widget):
+    """Wrap a view so oversized content scrolls instead of being cut off."""
+    area = QScrollArea()
+    area.setWidget(widget)
+    area.setWidgetResizable(True)          # expand to fill when there is room
+    area.setFrameShape(QScrollArea.NoFrame)
+    return area
 
 
 class MainWindow(QMainWindow):
@@ -74,6 +84,12 @@ class MainWindow(QMainWindow):
         title.setObjectName("heroTitle")
         subtitle = QLabel("— slowdowns, stalls and crashes on this machine")
         subtitle.setObjectName("heroSubtitle")
+        # The header sits outside the scroll areas, so an unwrapping label here
+        # sets the window's minimum width for the whole application. Measured:
+        # this one alone accounted for 624px of a 1155px floor, against a
+        # declared minimum of 1024.
+        subtitle.setWordWrap(True)
+        subtitle.setMinimumWidth(1)
         header.addWidget(title)
         header.addSpacing(10)
         header.addWidget(subtitle)
@@ -84,9 +100,16 @@ class MainWindow(QMainWindow):
         self.stage1 = Stage1View(self.state)
         self.stage2 = Stage2View(self.state)
         self.data_view = DataView()
-        self.tabs.addTab(self.data_view, "Captured Data")
-        self.tabs.addTab(self.stage1, "1 — Baseline && Training")
-        self.tabs.addTab(self.stage2, "2 — Run RCA Inference")
+        # Every tab scrolls. The window declares a 1024x640 minimum it could
+        # not actually render: measured, Stage 2 asks for 1168px of height and
+        # the Captured Data table for 1752px of width, so at the minimum size
+        # content was clipped with no way to reach it. The same arithmetic bites
+        # anyone running at 150% scaling, where the effective desktop shrinks by
+        # a third. Scrolling is the honest answer -- the alternative is a
+        # minimum size larger than many laptop screens.
+        self.tabs.addTab(_scrollable(self.data_view), "Captured Data")
+        self.tabs.addTab(_scrollable(self.stage1), "1 — Baseline && Training")
+        self.tabs.addTab(_scrollable(self.stage2), "2 — Run RCA Inference")
         layout.addWidget(self.tabs)
 
         self.setCentralWidget(central)

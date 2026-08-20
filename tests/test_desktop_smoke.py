@@ -767,3 +767,35 @@ def test_resuming_restores_supervision_not_just_the_collector(tmp_path, monkeypa
     assert schedule.resume_collection() is True
     assert not config.stop_flag_path().exists(), "the flag must be lifted"
     assert "supervise.ps1" in " ".join(launched["argv"]), launched["argv"]
+
+
+def test_the_window_can_render_at_the_minimum_size_it_declares(qtbot):
+    """The app set a 1024x640 minimum it could not actually honour.
+
+    Measured before the fix: Stage 2 wanted 1168px of height and the Captured
+    Data table 1752px of width, with no scroll area anywhere, so at the
+    declared minimum content was clipped with no way to reach it. A header
+    label that did not wrap then held the window's own floor at 1155px wide.
+    The same arithmetic bites anyone at 150% scaling, where the usable desktop
+    shrinks by a third.
+    """
+    from desktop.main_window import MINIMUM_SIZE, MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+
+    hint = window.minimumSizeHint()
+    assert hint.width() <= MINIMUM_SIZE[0], (
+        f"window cannot shrink to its own minimum width: {hint.width()} > {MINIMUM_SIZE[0]}"
+    )
+    assert hint.height() <= MINIMUM_SIZE[1], (
+        f"window cannot shrink to its own minimum height: {hint.height()} > {MINIMUM_SIZE[1]}"
+    )
+
+    # Every tab must scroll, or oversized content is simply cut off.
+    for index in range(window.tabs.count()):
+        page = window.tabs.widget(index)
+        assert hasattr(page, "setWidgetResizable"), (
+            f"tab {index} ({window.tabs.tabText(index)}) is not scrollable"
+        )

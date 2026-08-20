@@ -247,7 +247,11 @@ published SHA256.
 - [x] Progress reporting on both long operations
 - [x] Full-screen figures
 - [ ] **DPI scaling** — never tested at 125%/150%/200%
-- [ ] **Small screens** — window opens at 1400×900; behaviour below that is unknown
+- [x] **Small screens** — the window declared a 1024×640 minimum it could not
+      render: Stage 2 wanted 1168px of height, the Captured Data table 1752px
+      of width, and no view scrolled, so content was clipped with no way to
+      reach it. Every tab is now in a scroll area and unwrapped labels no
+      longer set the floor. Window minimum: **1155×180 → 532×180**
 - [ ] **Multi-monitor** — full-screen dialog on the correct display
 - [x] **Focus indicators on every focusable control** — a stylesheet
       background stops Qt drawing the native focus rectangle, so styling a
