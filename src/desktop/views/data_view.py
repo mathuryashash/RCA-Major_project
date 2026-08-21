@@ -96,8 +96,13 @@ class DataView(QWidget):
             ["Group", "Channel", "Latest value", "Unit", "Used by model"]
         )
         self.table.verticalHeader().setVisible(False)
-        # Show a useful number of channels before scrolling.
-        self.table.setMinimumHeight(430)
+        # 430px of forced height sat on top of the form above it, pushing the
+        # page past the window and putting a second scrollbar beside the
+        # table's own -- two nested bars in the same corner, which is what the
+        # eye reads as the panel sliding under itself. The table still scrolls
+        # internally for the full channel list; it simply no longer demands
+        # more height than the page can give.
+        self.table.setMinimumHeight(220)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         channel_layout.addWidget(self.table)
         channel_box.setLayout(channel_layout)

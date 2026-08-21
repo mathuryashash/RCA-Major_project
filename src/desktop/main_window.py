@@ -1,7 +1,7 @@
 """Main window — tab shell wiring Stage 1 and Stage 2 views together."""
 
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QScrollArea, QTabWidget, QLabel, QHBoxLayout,
+    QApplication, QMainWindow, QScrollArea, QSizePolicy, QTabWidget, QLabel, QHBoxLayout,
     QVBoxLayout, QWidget,
 )
 
@@ -84,16 +84,19 @@ class MainWindow(QMainWindow):
         title.setObjectName("heroTitle")
         subtitle = QLabel("— slowdowns, stalls and crashes on this machine")
         subtitle.setObjectName("heroSubtitle")
-        # The header sits outside the scroll areas, so an unwrapping label here
-        # sets the window's minimum width for the whole application. Measured:
-        # this one alone accounted for 624px of a 1155px floor, against a
-        # declared minimum of 1024.
-        subtitle.setWordWrap(True)
+        # The header sits outside the scroll areas, so a label that cannot
+        # shrink here sets the minimum width for the whole application -- this
+        # one alone accounted for 624px of a 1155px floor against a declared
+        # minimum of 1024. It shrinks by eliding rather than by wrapping:
+        # allowing it to wrap while a trailing spacer took all the spare width
+        # left it one word per line, a thin vertical column beside the title.
         subtitle.setMinimumWidth(1)
+        subtitle.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         header.addWidget(title)
         header.addSpacing(10)
-        header.addWidget(subtitle)
-        header.addStretch(1)
+        # The subtitle takes the slack itself, so there is no trailing spacer
+        # competing with it for the same space.
+        header.addWidget(subtitle, stretch=1)
         layout.addLayout(header)
 
         self.tabs = QTabWidget()
