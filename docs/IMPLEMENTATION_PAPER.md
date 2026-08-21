@@ -2,7 +2,7 @@
 
 **An implementation paper**
 
-Version 1.4.0 · revised 2026-08-20
+Version 1.4.1 · revised 2026-08-21
 
 ---
 
@@ -1480,10 +1480,10 @@ PyInstaller `--onedir`, two executables, unsigned.
 
 | Property | Value |
 |---|---|
-| Version | 1.4.0 |
+| Version | 1.4.1 |
 | Installed size | 1,109 MB (from 1,538 MB) |
 | Release ZIP | 433.4 MB |
-| SHA256 | `6224D5EC2023AB8F30260A75289EB757DC2A15C2C7310611A6BC1746EF94C9A4` |
+| SHA256 | `BD9792028F6F8001CBBCDB4B4E0C51DBD737D87CDB3ECE4CE37DBCF61D280EED` |
 | Install | extract → run → agree |
 
 Two builds have been discarded rather than shipped, on the same principle:
