@@ -501,3 +501,84 @@ def test_vacuum_does_not_rewrite_a_large_file_for_a_small_gain(tmp_path, monkeyp
     store.purge_proc_samples(conn, 9_999_999_999)
     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     assert store.reclaim(conn) > 0
+
+
+def test_version_comparison_is_numeric_not_lexical():
+    """"1.10.0" is newer than "1.9.0"; string comparison says otherwise.
+
+    Getting this wrong tells everyone on the newest build to downgrade.
+    """
+    from telemetry.updates import _parse
+
+    assert _parse("v1.10.0") > _parse("v1.9.0")
+    assert _parse("1.4.1") > _parse("1.4.0")
+    assert _parse("v2.0.0") > _parse("v1.99.99")
+    assert _parse("nonsense") == (0,)
+
+
+def test_update_check_does_nothing_until_switched_on(tmp_path):
+    """The network must stay closed unless the user opened it."""
+    from telemetry import store, updates
+
+    conn = store.connect(tmp_path / "t.db")
+    store.init_schema(conn)
+
+    assert updates.is_enabled(conn) is False
+    status = updates.check("1.0.0", conn=conn)
+    assert status.checked is False
+    assert "turned off" in status.reason
+
+    updates.set_enabled(conn, True)
+    assert updates.is_enabled(conn) is True
+
+
+def test_a_failed_check_is_reported_not_raised(monkeypatch):
+    """Offline is a normal state, not an error worth interrupting anyone for."""
+    import urllib.error
+
+    from telemetry import updates
+
+    def refuse(*args, **kwargs):
+        raise urllib.error.URLError("no route to host")
+
+    monkeypatch.setattr(updates.urllib.request, "urlopen", refuse)
+    status = updates.check("1.0.0", force=True)
+
+    assert status.checked is False
+    assert status.available is False          # never claim an update on failure
+    assert "could not reach" in status.reason
+
+
+def test_the_request_sends_nothing_about_the_machine(monkeypatch):
+    """A version check must not become telemetry by accident."""
+    from telemetry import updates
+
+    captured = {}
+
+    class _Response:
+        def read(self):
+            return b'{"tag_name": "v9.9.9", "html_url": "https://example.invalid"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def capture(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["method"] = request.get_method()
+        captured["body"] = request.data
+        captured["headers"] = dict(request.header_items())
+        return _Response()
+
+    monkeypatch.setattr(updates.urllib.request, "urlopen", capture)
+    status = updates.check("1.4.1", force=True)
+
+    assert status.available is True and status.latest == "v9.9.9"
+    assert captured["method"] == "GET"
+    assert captured["body"] is None, "a version check must never have a request body"
+    assert "?" not in captured["url"], "no query string, so nothing can ride along in one"
+    # The User-Agent names the software and its version, and nothing else.
+    agent = next(v for k, v in captured["headers"].items() if k.lower() == "user-agent")
+    assert agent == "LocalRCA/1.4.1"

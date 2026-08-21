@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from desktop.workers import DetectIncidentsWorker, InferenceWorker, model_path
-from desktop.views.graph_panel import PlotlyWebView
+from desktop.views.graph_panel import FigurePanel
 from pipeline import engine
 from pipeline.visualizations import build_timeline_figure, draw_causal_graph
 
@@ -112,7 +112,7 @@ class Stage2View(QWidget):
         ))
         self.results_tabs.addTab(self.root_cause_table, "Root Causes")
 
-        self.graph_view = PlotlyWebView(
+        self.graph_view = FigurePanel(
             title="Causal Graph",
             legend=(
                 "Each circle is an anomalous metric; colour runs from red for the "
@@ -124,7 +124,7 @@ class Stage2View(QWidget):
             ),
         )
         self.results_tabs.addTab(self.graph_view, "Causal Graph")
-        self.timeline_view = PlotlyWebView(
+        self.timeline_view = FigurePanel(
             title="Anomaly Timeline",
             legend=(
                 "One line per metric, scaled 0–1 so unrelated units can share an axis, "

@@ -33,12 +33,20 @@ foreach ($doc in 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'INSTALL.md', 'README.md')
     Copy-Item $doc $staging
 }
 
+# One double-click, instead of "extract everything then find the exe two
+# folders down". It refuses to run from inside the archive, which is the way
+# people actually fail at this.
+Copy-Item 'packaging\Install LocalRCA.bat' $staging
+
 # A first-run reader should not have to guess which file to open.
 @"
 LocalRCA v$version
 
-Start here:  INSTALL.md
-Run:         RCA-Desktop\RCA-Desktop.exe
+Start here:  double-click  "Install LocalRCA.bat"
+             (or read INSTALL.md, or run RCA-Desktop\RCA-Desktop.exe directly)
+
+Disk space:  about 1.1 GB extracted, plus roughly 3.3 MB per day of
+             collected telemetry, which is capped by retention.
 
 The FIRST launch takes about a minute -- Windows scans several thousand
 newly extracted files. Every launch after that takes under ten seconds.

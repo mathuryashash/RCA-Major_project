@@ -3,10 +3,10 @@
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QMessageBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from telemetry import config, schedule
+from telemetry import config, schedule, store, updates
 from telemetry.analysis import MODELLED_COLUMNS, store_summary
 from telemetry.collector import request_stop
 
@@ -121,8 +121,14 @@ class DataView(QWidget):
         self.collection_state.setWordWrap(True)
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh)
+        # The only control in this application that can open a socket, so it
+        # says so on its face rather than in a settings pane somewhere.
+        self.update_button = QPushButton("Check for updates")
+        self.update_button.setAccessibleName("Check online for a newer release")
+        self.update_button.clicked.connect(self._check_for_update)
         controls.addWidget(self.pause_button)
         controls.addWidget(self.refresh_button)
+        controls.addWidget(self.update_button)
         controls.addWidget(self.collection_state, stretch=1)
         layout.addLayout(controls)
 
@@ -130,6 +136,56 @@ class DataView(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
         self._timer.start(30_000)
+
+    def _check_for_update(self):
+        """Ask GitHub whether a newer release exists. Nothing else.
+
+        Consent is asked once, in plain terms, because this is the only place
+        the application contacts anything. Declining is remembered, and the
+        check never runs on its own -- no timer, no startup probe.
+        """
+        from version import __version__
+
+        try:
+            connection = store.connect(config.db_path())
+            store.init_schema(connection)
+        except Exception as exc:  # noqa: BLE001
+            self.collection_state.setText(f"Could not check: {exc}")
+            return
+
+        if not updates.is_enabled(connection):
+            answer = QMessageBox.question(
+                self, "Check for updates",
+                "This contacts github.com to read the version number of the "
+                "newest release, and nothing else.\n\n"
+                "No telemetry is sent, nothing is downloaded or installed, and "
+                "the check only ever runs when you press this button.\n\n"
+                "It is the only part of this application that uses the "
+                "network. Allow it?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                self.collection_state.setText("Update checks stay off.")
+                return
+            updates.set_enabled(connection, True)
+
+        self.update_button.setEnabled(False)
+        self.collection_state.setText("Checking …")
+        status = updates.check(__version__, conn=connection)
+        self.update_button.setEnabled(True)
+
+        if not status.checked:
+            self.collection_state.setText(status.reason)
+        elif status.available:
+            self.collection_state.setText(
+                f"Version {status.latest} is available (you have {status.current}). "
+                f"Download it from {status.url}"
+            )
+        else:
+            self.collection_state.setText(
+                f"Up to date ({__version__})." if not status.reason
+                else f"{status.reason} ({__version__})."
+            )
 
     def _toggle_collection(self):
         """Stop or restart collection, and say what actually happened.

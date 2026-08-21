@@ -91,7 +91,8 @@ colorlog
 comtypes
 confection
 configobj
-contourpy
+# contourpy -- matplotlib dependency. Excluded while the app used Plotly; un-excluded
+# when the figures moved onto a Qt canvas.
 coverage
 cpuinfo
 crewai
@@ -103,7 +104,8 @@ ctranslate2
 customtkinter
 cut_cross_entropy
 cv2
-cycler
+# cycler -- matplotlib dependency. Excluded while the app used Plotly; un-excluded
+# when the figures moved onto a Qt canvas.
 cyclopts
 cymem
 darkdetect
@@ -179,7 +181,9 @@ flask_sqlalchemy
 flask_wtf
 flatbuffers
 flatten_dict
-fontTools
+# fontTools -- matplotlib dependency. Excluded while the app used Plotly;
+# un-excluded when the figures moved onto a Qt canvas. Note the capital T:
+# a case-sensitive fix for this list silently missed it and reported success.
 forbiddenfruit
 frozenlist
 funcy
@@ -261,7 +265,8 @@ keras
 key_value
 keyboard
 keyring
-kiwisolver
+# kiwisolver -- matplotlib dependency. Excluded while the app used Plotly; un-excluded
+# when the figures moved onto a Qt canvas.
 kokoro_onnx
 kombu
 kubernetes
@@ -312,7 +317,9 @@ markdownify
 marko
 marshmallow
 marshmallow_sqlalchemy
-matplotlib
+# matplotlib -- REQUIRED since figures moved off QtWebEngine. Excluded here
+# while the app used Plotly; leaving it excluded let the build succeed, the
+# application launch, and only fail when someone actually drew a figure.
 mccabe
 mcpadapt
 mdit_py_plugins
@@ -630,3 +637,16 @@ youtube_transcript_api
 yt_dlp
 zopfli
 zstandard
+
+# Replaced by matplotlib on a native Qt canvas. QtWebEngine cost 258 MB of
+# DLLs plus 29 MB of resources, 53 MB of translations and a 20 MB software
+# OpenGL fallback -- about a third of the installed application, to draw two
+# charts. Nothing imports these any more; excluding them makes that permanent.
+PySide6.QtWebEngineWidgets
+PySide6.QtWebEngineCore
+PySide6.QtWebEngineQuick
+PySide6.QtWebChannel
+PySide6.QtQuick
+PySide6.QtQml
+plotly
+kaleido

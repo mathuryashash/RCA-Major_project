@@ -1,43 +1,41 @@
-"""Reusable widget that renders a Plotly figure inside a QWebEngineView.
+"""A matplotlib figure in a native Qt canvas, with a legend and a full view.
 
-Writes each figure to a temp HTML file (with plotly.js embedded inline —
-no network access needed) and loads it via a file:// URL, since
-QWebEngineView.setHtml() silently truncates content over ~2MB and a
-fully self-contained Plotly export is larger than that.
+This used to embed Plotly in a QWebEngineView, which meant shipping a browser
+engine to draw two charts: 258 MB of WebEngine DLLs, 29 MB of resources, 53 MB
+of translations and a 20 MB software OpenGL fallback -- about a third of the
+installed application. A Qt canvas does the same job for the 28 MB matplotlib
+already needs.
+
+Two things improved as a side effect. Figures no longer round-trip through
+temporary HTML files, which previously left rendered metric values in the
+user's temp directory and had to be cleaned up explicitly by
+`delete-all-data`. And pan and zoom now come from the standard matplotlib
+toolbar rather than from JavaScript. The loss is hover tooltips, which the
+edge labels and the legend largely cover.
 """
 
-import atexit
-import os
-import shutil
-import tempfile
-
-from PySide6.QtCore import Qt, QUrl
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
-try:
-    from PySide6.QtWebEngineWidgets import QWebEngineView
-    _WEBENGINE_AVAILABLE = True
-except ImportError:
-    _WEBENGINE_AVAILABLE = False
 
-
-class PlotlyWebView(QWidget):
-    """A Plotly figure with a legend and a full-screen view.
+class FigurePanel(QWidget):
+    """A figure with a caption and a full-screen view.
 
     Both figures are detailed and unreadable in a tab a few hundred pixels
-    tall, so each carries a caption explaining what is drawn and can be
-    opened full screen.
+    tall, so each carries a caption explaining what is drawn and can be opened
+    full screen.
     """
 
     #: A preferred height, not a floor. Inside a scroll area Qt sizes the page
-    #: to its content's sizeHint, and a QWebEngineView asks for roughly 700px
-    #: by default -- two of them put the results panel at 775px, which pushed
-    #: Stage 2 past the window and produced a second scrollbar beside the ones
-    #: the figures and tables already have. Asking for less lets the page fit
-    #: on a normal display while the size policy still expands the figure to
-    #: fill whatever room there is.
+    #: to its content's sizeHint, so two figures asking for their natural
+    #: height pushed the results panel past the window and produced a second
+    #: scrollbar beside the ones the tables already have. Asking for less lets
+    #: the page fit on a normal display while the size policy still expands the
+    #: figure to fill whatever room there is.
     PREFERRED_HEIGHT = 340
 
     def sizeHint(self):
@@ -47,17 +45,13 @@ class PlotlyWebView(QWidget):
 
     def __init__(self, parent=None, title: str = "", legend: str = ""):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(4)
 
         self._title = title
         self._legend = legend
         self._figure = None
-
-        self._tmp_dir = tempfile.mkdtemp(prefix="rca_desktop_")
-        atexit.register(shutil.rmtree, self._tmp_dir, ignore_errors=True)
-        self._file_counter = 0
 
         if title or legend:
             header = QHBoxLayout()
@@ -67,79 +61,64 @@ class PlotlyWebView(QWidget):
             header.addWidget(caption, stretch=1)
             self.expand_button = QPushButton("Full screen")
             self.expand_button.setToolTip("Open this figure full screen (Esc to close)")
+            self.expand_button.setAccessibleName(f"Open {title or 'figure'} full screen")
             self.expand_button.clicked.connect(self.open_full_screen)
             header.addWidget(self.expand_button, alignment=Qt.AlignTop)
-            layout.addLayout(header)
+            self._layout.addLayout(header)
 
-        if _WEBENGINE_AVAILABLE:
-            self.view = QWebEngineView()
-            layout.addWidget(self.view, stretch=1)
-        else:
-            self.view = QLabel(
-                "QtWebEngine is not installed — graph view unavailable.\n"
-                "Run: pip install PySide6-Addons"
-            )
-            layout.addWidget(self.view, stretch=1)
+        self.placeholder = QLabel("")
+        self.placeholder.setAlignment(Qt.AlignCenter)
+        self.placeholder.setObjectName("figurePlaceholder")
+        self._layout.addWidget(self.placeholder, stretch=1)
+
+        self.canvas = None
+        self.toolbar = None
 
     def show_placeholder(self, message: str) -> None:
-        """Fill the panel before anything has been plotted.
-
-        An untouched QWebEngineView paints blank white, which against a dark
-        application reads as a broken chart rather than an empty one.
-        """
-        if not _WEBENGINE_AVAILABLE:
-            return
-        self.view.setHtml(
-            "<html><body style=\"margin:0;height:100vh;display:flex;"
-            "align-items:center;justify-content:center;background:#151a2e;"
-            "color:#7c8aa5;font-family:Inter,Segoe UI,sans-serif;font-size:14px\">"
-            f"<div>{message}</div></body></html>"
-        )
+        """Fill the panel before anything has been plotted."""
+        self.placeholder.setText(message)
+        self.placeholder.setVisible(True)
+        if self.canvas is not None:
+            self.canvas.setVisible(False)
+        if self.toolbar is not None:
+            self.toolbar.setVisible(False)
 
     def show_figure(self, fig) -> None:
+        """Display a figure, replacing whatever was shown before."""
         self._figure = fig
-        if not _WEBENGINE_AVAILABLE:
-            return
-        self._render(fig, self.view)
+        self.placeholder.setVisible(False)
 
-    def _render(self, fig, view, fill: bool = False) -> None:
-        """Write the figure to a temp file and point the view at it.
+        # Rebuilt rather than re-pointed: a matplotlib Figure holds a reference
+        # to exactly one canvas, so reusing the widget across figures leaves
+        # the previous figure attached to a canvas that no longer draws it.
+        self._detach_canvas()
 
-        ``fill`` makes the figure track the window instead of its own fixed
-        height. The figures are built at 420 and 520 pixels, which is right
-        inside a tab but left most of a full screen empty below them.
-        """
-        self._file_counter += 1
-        html_path = os.path.join(self._tmp_dir, f"figure_{self._file_counter}.html")
+        self.canvas = FigureCanvasQTAgg(fig)
+        self.canvas.setMinimumHeight(180)
+        self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        self.toolbar.setIconSize(self.toolbar.iconSize() * 0.8)
+        self._layout.addWidget(self.toolbar)
+        self._layout.addWidget(self.canvas, stretch=1)
+        self.canvas.draw_idle()
 
-        if fill:
-            import plotly.graph_objects as go
-
-            # Copy: the caller's figure is still on display behind the dialog
-            # and must keep its own height.
-            fig = go.Figure(fig)
-            fig.update_layout(height=None, autosize=True, margin=dict(t=60, b=60, l=60, r=40))
-
-        html = fig.to_html(
-            include_plotlyjs=True, full_html=True,
-            default_height="100%" if fill else None,
-            config={"responsive": True} if fill else None,
-        )
-        # The page body is white by default, so any area the plot does not
-        # occupy shows as a white band against the dark application.
-        html = html.replace(
-            "<body>", '<body style="margin:0;height:100vh;background:#151a2e">', 1,
-        )
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html)
-        view.setUrl(QUrl.fromLocalFile(html_path))
+    def _detach_canvas(self) -> None:
+        for widget in (self.toolbar, self.canvas):
+            if widget is not None:
+                self._layout.removeWidget(widget)
+                widget.setParent(None)
+                widget.deleteLater()
+        self.canvas = None
+        self.toolbar = None
 
     def open_full_screen(self) -> None:
         """Show the current figure on its own, with the legend beside it."""
-        if self._figure is None or not _WEBENGINE_AVAILABLE:
+        if self._figure is None:
             return
         dialog = _FullScreenFigure(self._figure, self._title, self._legend, self)
         dialog.exec()
+        # The dialog borrowed the figure. Re-attaching it here rather than
+        # leaving a dead canvas behind is what keeps the tab usable afterwards.
+        self.show_figure(self._figure)
 
 
 class _FullScreenFigure(QDialog):
@@ -167,15 +146,9 @@ class _FullScreenFigure(QDialog):
             caption.setObjectName("figureLegend")
             layout.addWidget(caption)
 
-        # Its own view, so the figure behind this dialog is left alone, but the
-        # owner's temp directory: constructing another PlotlyWebView made a new
-        # mkdtemp and a new atexit handler on every open, leaking a directory
-        # of rendered HTML per expansion for the life of the process.
-        if _WEBENGINE_AVAILABLE:
-            self.view = QWebEngineView()
-            layout.addWidget(self.view, stretch=1)
-            owner._render(fig, self.view, fill=True)
-        else:
-            layout.addWidget(QLabel("QtWebEngine is not installed."), stretch=1)
+        canvas = FigureCanvasQTAgg(fig)
+        layout.addWidget(NavigationToolbar2QT(canvas, self))
+        layout.addWidget(canvas, stretch=1)
+        canvas.draw_idle()
 
         self.showFullScreen()

@@ -234,7 +234,7 @@ def test_figures_can_be_opened_full_screen_with_a_legend(qtbot, monkeypatch):
     The graph and timeline each carry a caption saying what is drawn, and a
     button that opens the same figure on its own with a close control.
     """
-    import plotly.graph_objects as go
+    from matplotlib.figure import Figure
     from pipeline import engine
 
     monkeypatch.setattr(engine, "model_status", lambda path: engine.ModelStatus(
@@ -259,7 +259,7 @@ def test_figures_can_be_opened_full_screen_with_a_legend(qtbot, monkeypatch):
         panel.open_full_screen()
         assert len(opened) == before, "expanding an empty panel must do nothing"
 
-        panel.show_figure(go.Figure())
+        panel.show_figure(Figure())
         panel.open_full_screen()
         assert len(opened) == before + 1
 
@@ -392,38 +392,46 @@ def test_figure_panels_are_not_blank_before_a_run(qtbot, monkeypatch):
         assert hasattr(panel, "show_placeholder")
 
 
-def test_full_screen_figure_fills_the_window(qtbot, monkeypatch):
-    """The figures are built at a fixed height that left most of a screen blank.
+def test_full_screen_leaves_the_tab_figure_usable(qtbot, monkeypatch):
+    """A matplotlib Figure belongs to exactly one canvas at a time.
 
-    Expanding one has to drop that height and let it track the window, and
-    must not disturb the copy still displayed in the tab behind the dialog.
+    Handing the figure to a full-screen dialog therefore detaches it from the
+    canvas in the tab, and without re-attaching afterwards the tab is left
+    showing a dead widget. The Plotly version could not have this bug -- it
+    wrote a second HTML file -- so the test that covered it had nothing to say
+    about the replacement.
     """
-    import os
+    from matplotlib.figure import Figure
 
-    import plotly.graph_objects as go
+    from desktop.views import graph_panel
     from pipeline import engine
 
     monkeypatch.setattr(engine, "model_status", lambda path: engine.ModelStatus(
         exists=True, age_days=1.0))
 
+    opened = []
+    monkeypatch.setattr(graph_panel._FullScreenFigure, "exec",
+                        lambda self: opened.append(self))
+
     window = MainWindow()
     qtbot.addWidget(window)
     panel = window.stage2.timeline_view
 
-    figure = go.Figure(go.Scatter(x=[1, 2, 3], y=[1, 2, 3]))
-    figure.update_layout(height=420)
+    figure = Figure()
+    figure.add_subplot(111).plot([1, 2, 3], [1, 2, 3])
+    panel.show_figure(figure)
+    first_canvas = panel.canvas
+    assert first_canvas is not None
 
-    panel._render(figure, panel.view, fill=False)
-    tabbed = open(os.path.join(panel._tmp_dir, "figure_1.html"), encoding="utf-8").read()
-    panel._render(figure, panel.view, fill=True)
-    expanded = open(os.path.join(panel._tmp_dir, "figure_2.html"), encoding="utf-8").read()
+    panel.open_full_screen()
+    assert len(opened) == 1
 
-    assert '"height":420' in tabbed.replace(" ", "")
-    assert '"height":420' not in expanded.replace(" ", "")
-    assert '"autosize":true' in expanded.replace(" ", "")
-    assert figure.layout.height == 420, "the tab's own figure must be untouched"
-    # The page body is white by default, which shows as a band around the plot.
-    assert "background:#151a2e" in expanded
+    # Back in the tab: a live canvas, still showing the same figure.
+    assert panel.canvas is not None
+    assert panel.canvas is not first_canvas, "the tab must get a fresh canvas"
+    assert panel.canvas.figure is figure
+    for dialog in opened:
+        dialog.close()
 
 
 def test_agreeing_completes_the_install_without_a_command_line(qtbot, tmp_path, monkeypatch):
@@ -608,15 +616,28 @@ def test_results_table_has_an_empty_state_before_any_run(qtbot):
 
 
 def test_the_empty_causal_graph_is_not_a_white_rectangle():
-    """The most important honest state must not read as a broken chart."""
+    """The most important honest state must not read as a broken chart.
+
+    The original defect was inheriting the plotting library's white default,
+    so "no causal edge survived" rendered as a bright rectangle in a dark
+    application. That trap is identical in matplotlib, which also defaults to
+    white, so the assertion follows the figure to its new backend.
+    """
     import networkx as nx
 
-    from pipeline.visualizations import draw_causal_graph
+    from pipeline.visualizations import SURFACE, draw_causal_graph
+
+    def as_hex(rgba):
+        return "#%02x%02x%02x" % tuple(int(channel * 255) for channel in rgba[:3])
 
     figure = draw_causal_graph(nx.DiGraph(), "")
-    assert figure.layout.paper_bgcolor == "#151a2e"
-    assert figure.layout.plot_bgcolor == "#151a2e"
-    assert "No causal link" in figure.layout.title.text
+    axes = figure.axes[0]
+
+    assert as_hex(figure.patch.get_facecolor()) == SURFACE
+    assert as_hex(axes.get_facecolor()) == SURFACE
+    assert "No causal link" in axes.get_title()
+    # ...and it must say *why* it is empty, not just that it is.
+    assert any("too short" in text.get_text() for text in axes.texts)
 
 
 def test_a_failed_run_clears_the_previous_verdict(qtbot):
@@ -886,3 +907,41 @@ def test_no_nested_scrollbars_on_a_normal_display(qtbot):
 
     # ...and the content must still be reachable when the window really is small.
     assert window.minimumSizeHint().height() <= 640
+
+
+def test_every_module_the_figures_need_is_importable():
+    """The packaged build excluded matplotlib, then excluded its dependencies.
+
+    Both failures produced an application that launched, ran, and reported
+    itself healthy -- and raised ModuleNotFoundError the moment someone drew a
+    figure, which no launch-and-look check reaches. The first version of this
+    test named three modules by hand and passed while `cycler`, `contourpy`,
+    `fonttools` and `kiwisolver` were all still excluded, so it now asks the
+    package what it actually needs instead of trusting a list I wrote.
+    """
+    import importlib
+    import importlib.metadata as metadata
+    import pathlib as _pathlib
+
+    for module in ("matplotlib", "matplotlib.figure",
+                   "matplotlib.backends.backend_qtagg", "networkx"):
+        importlib.import_module(module)
+
+    excludes = _pathlib.Path("packaging/excludes.txt").read_text(encoding="utf-8")
+    listed = {
+        line.strip().lower() for line in excludes.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+
+    required = {"matplotlib", "networkx"}
+    for requirement in metadata.requires("matplotlib") or []:
+        # "cycler>=0.10" / "pillow>=8; extra == 'test'" -> "cycler" / "pillow"
+        if ";" in requirement:
+            continue                      # optional extra, not needed to draw
+        name = requirement.split(">")[0].split("<")[0].split("=")[0].split("[")[0]
+        required.add(name.strip().replace("-", "_").lower())
+
+    collision = required & listed
+    assert not collision, (
+        f"the packaged build excludes modules the figures need: {sorted(collision)}"
+    )

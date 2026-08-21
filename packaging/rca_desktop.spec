@@ -24,6 +24,19 @@ a = Analysis(
         # static analysis reaches it -- while its .dist-info ships anyway and
         # tells torch the package is there. See packaging/excludes.txt.
         "optree",
+        # Belt and braces rather than a fix for a proven defect. Matplotlib
+        # backends are often selected at runtime through matplotlib.use(),
+        # which static analysis cannot follow; this application imports the Qt
+        # canvas directly, so PyInstaller does find it, and the build manifest
+        # confirms it. Stated explicitly so a future refactor that moves the
+        # import behind matplotlib.use() does not silently drop the backend.
+        #
+        # (An earlier comment here claimed the backend was missing from the
+        # bundle. That was wrong: pure-Python modules live in the PYZ archive,
+        # not as loose files under _internal, so looking for them on disk finds
+        # nothing regardless.)
+        "matplotlib.backends.backend_qtagg",
+        "matplotlib.backends.backend_agg",
     ],
     hookspath=[os.path.join(project_root, "packaging", "hooks")],
     runtime_hooks=[os.path.join(project_root, "packaging", "runtime_hook.py")],
