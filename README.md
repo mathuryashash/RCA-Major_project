@@ -73,6 +73,40 @@ ranker whose dominant term is out-degree. Hence the FDR correction, the
 effect-size floor and the minimum sample count. **When nothing survives, the
 report says "no supported causal chain" and makes no causal claim.**
 
+### How often it actually explains anything
+
+Measured by replaying the pipeline over every incident in real collected
+history (`tools/measure_causal_yield.py`, no injection, read-only):
+
+```
+incidents the detector found        175   100%
+...long enough for Granger to test   92    53%
+...that produced any causal edge     29    17%
+```
+
+**Roughly one in six.** That is the honest headline, and it is deliberately
+the unflattering denominator — 31.5% is the share of *analysable* incidents,
+which reads better and describes fewer situations.
+
+Yield depends strongly on how much data the window holds:
+
+| window | incidents | explained |
+|---|---|---|
+| 0–30 min | 48 | 25% |
+| 30–60 min | 20 | 25% |
+| 60–120 min | 10 | **50%** |
+| 120–360 min | 9 | **56%** |
+
+The rate doubles past an hour. Nearly half of all incidents (47%) are shorter
+than the Granger sample floor and cannot be tested at any setting — the system
+says so rather than guessing.
+
+Under controlled fault injection the pipeline has correctly explained a cause
+it was never told about: a 30-minute CPU burn was ranked `cpu_pct` first with
+six surviving causal edges pointing *away* from CPU. It has also failed
+informatively — a disk fault produced the right answer by a route the system
+could not claim as causal, and said so.
+
 ---
 
 ## Quick start
@@ -208,6 +242,29 @@ recorded before it existed.
 
 Everything stays on the machine. The collector opens no sockets.
 
+**There is an off switch.** *Captured Data → Pause collection* stops recording
+within about 30 seconds and stays stopped across restarts until you resume.
+Previously the only way to stop was to uninstall, which is not a defensible
+position for a tool whose case rests on privacy.
+
+**Nothing is kept forever, while the collector runs.**
+
+| Data | Kept for |
+|---|---|
+| Numeric readings | 365 days |
+| Windows Event Log entries | 365 days |
+| Per-process samples | 30 days |
+| **Foreground application name** | **30 days** |
+
+The foreground application name and the idle timer together reconstruct when
+the machine was in use and roughly what for, which makes them the most personal
+thing collected — so they are the shortest-lived. Freed space is returned to
+the filesystem rather than left inside the database file.
+
+One honest caveat: expiry is performed by the collector while it runs. Stop it
+and nothing expires after that; `delete-all-data` is the way to erase what is
+already there.
+
 - **Window titles are never captured** — only the foreground executable name.
   Titles leak document names, URLs and message contents.
 - **Event message text is not stored** unless you pass `--capture-messages`.
@@ -238,8 +295,10 @@ Measured on the development machine (20 logical cores, RTX 4060 Laptop).
 | Collector CPU | 0.36% of one core | measured |
 | Model size | 129k parameters (0.52 MB) | measured |
 | Training | ~24 s | benchmark at 1,716 windows × 25 features |
-| Desktop app | 455 MB | measured; QtWebEngine dominates |
-| Packaged build | 1.5 GB | measured; torch is 628 MB of it |
+| Desktop app | 511 MB resident | measured over 4 min; plateaus, not a leak |
+| Packaged build | 1,109 MB installed | measured; torch dominates |
+| Release download | 433 MB (ZIP) | measured |
+| Database growth | **3.33 MB/day**, bounded | measured over 18.2 days |
 
 **No GPU is used for training.** The model is 0.52 MB, and a 60-step LSTM at
 hidden=64 is kernel-launch bound — a GPU sits idle between launches, while the
@@ -288,14 +347,45 @@ grep -rn "np\.random\|torch\.randn" src/
 
 ## Limitations
 
-- **Windows only.** Event Log ingestion and idle/foreground detection use Win32 APIs.
-- **Needs ~21 hours of uninterrupted collection** before the first model.
-- **Single machine.** No fleet or cross-host analysis.
-- **Slow drift is out of scope.** A disk filling over weeks, or a memory leak
-  with a rising floor, needs a trend detector; acute resource exhaustion is handled.
-- **Causal claims are statistical**, constrained by a hand-specified topology.
-  Reports state how much evidence survived correction rather than implying a
-  verified answer.
+Stated plainly, because you would be running this on your own machine.
+
+**Distribution**
+
+- **Unsigned.** Every user meets a SmartScreen warning on the download.
+  Mitigated only by the published SHA256 on the release.
+- **No update mechanism.** A defect that ships stays until you fetch a newer
+  release yourself.
+- **No crash reporting**, and irreconcilably so: `desktop.log` never leaves the
+  machine, which is the promise working as designed and also means problems are
+  invisible unless you send that file.
+
+**Evidence**
+
+- **Every measurement comes from one machine.** Nothing here establishes
+  generality, and one measurement — memory-fault detection — is provably
+  *unobtainable* on this host, because a safety-bounded injection cannot exceed
+  a memory level the machine already reaches on its own.
+- **No fault has been tested whose cause is not also the loudest metric**, so a
+  correct causal answer and a correct severity answer are not yet
+  distinguishable.
+- **The subsystem map is hand-written and one-directional.** It is a strict
+  order `power, process → cpu → memory → disk → network`, so `network` is a
+  sink and nothing can be reported as caused by network activity. It rejects
+  26% of pairs the statistics accept, including `network → disk` — a download
+  writing to disk — which is the strongest relationship measured anywhere in
+  this project.
+
+**Behaviour**
+
+- **It declines to explain more often than it explains** (§ above): about one
+  incident in six gets a causal chain. That is the design working, not failing,
+  but it is worth knowing before you install it.
+- **The first day is empty.** ~21 hours of clean collection are needed before
+  training unlocks, and there is no sample dataset to explore meanwhile.
+- **Interface defects are not reachable by the test suite** in the form a user
+  meets them — 130 tests pass with the layout correct and with it visibly
+  broken. Layout is verified by rendering the window and looking at it.
+- **Single-machine scope.** Nothing correlates across machines, by design.
 
 ---
 
