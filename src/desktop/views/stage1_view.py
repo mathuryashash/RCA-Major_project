@@ -1,5 +1,7 @@
 """Train a baseline model from collected local telemetry."""
 
+import sys
+
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout, QSlider,
@@ -125,12 +127,29 @@ class Stage1View(QWidget):
                 config.db_path(), window_size=self.window_size_spin.value()
             )
         except Exception as exc:  # noqa: BLE001 - no collector yet is a normal state
-            self.clean_days_label.setText("no telemetry collected yet")
+            # This is the first thing a new user sees, and it used to be the
+            # worst: an instruction to run `python -m telemetry install`, which
+            # someone who downloaded a packaged ZIP has no Python to run, sat
+            # beside a raw sqlite error string. Two ways of saying "broken" to
+            # a person whose installation is working exactly as intended.
+            self.clean_days_label.setText("nothing collected yet")
             self.uninterrupted_label.setText("—")
             self.current_run_label.setText("—")
-            self.remaining_label.setText("start the collector: python -m telemetry install")
+            if getattr(sys, "frozen", False):
+                self.remaining_label.setText(
+                    "Collection starts on its own — check back in about a day."
+                )
+                self.status_label.setText(
+                    "Waiting for the first samples. The collector runs in the "
+                    "background and needs roughly 21 hours of quiet history "
+                    "before there is enough to learn from."
+                )
+            else:
+                self.remaining_label.setText(
+                    "start the collector:  python -m telemetry install"
+                )
+                self.status_label.setText(f"No database yet ({exc})")
             self.train_button.setEnabled(False)
-            self.status_label.setText(str(exc))
             return
 
         self.clean_days_label.setText(
@@ -144,12 +163,27 @@ class Stage1View(QWidget):
         self.current_run_label.setText(
             f"{readiness.current_run_samples:,} / {readiness.required_samples:,} samples"
         )
+        # A percentage, not just a countdown. The first day of this application
+        # is otherwise a screen that says "wait" and never visibly moves, which
+        # is indistinguishable from one that has stopped working.
+        collected = min(readiness.current_run_samples, readiness.required_samples)
+        share = 100.0 * collected / max(readiness.required_samples, 1)
+
         if readiness.ready:
             self.remaining_label.setText("ready to train")
+            self.progress_bar.setValue(100)
         elif readiness.hours_remaining < 24:
-            self.remaining_label.setText(f"{readiness.hours_remaining:.1f} hours remaining")
+            self.remaining_label.setText(
+                f"{share:.0f}% collected — about {readiness.hours_remaining:.1f} "
+                f"hours to go"
+            )
+            self.progress_bar.setValue(int(share))
         else:
-            self.remaining_label.setText(f"{readiness.days_remaining:.2f} days remaining")
+            self.remaining_label.setText(
+                f"{share:.0f}% collected — about {readiness.days_remaining:.1f} "
+                f"days to go"
+            )
+            self.progress_bar.setValue(int(share))
 
         self._total_windows = readiness.total_windows
         self._refresh_estimate()

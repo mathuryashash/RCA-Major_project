@@ -75,7 +75,11 @@ def test_stage1_train_button_gated_on_uninterrupted_baseline(qtbot, monkeypatch)
     qtbot.addWidget(window)
     window.stage1.refresh_status()
     assert window.stage1.train_button.isEnabled() is False
-    assert "2.00 days remaining" in window.stage1.remaining_label.text()
+    # The countdown now leads with how far along collection is, because a day
+    # of "wait" that never visibly moves reads as a stalled application.
+    shown = window.stage1.remaining_label.text()
+    assert "2.0 days to go" in shown, shown
+    assert "% collected" in shown, shown
 
 
 def test_stage1_train_button_triggers_worker_once_ready(qtbot, monkeypatch):
@@ -945,3 +949,53 @@ def test_every_module_the_figures_need_is_importable():
     assert not collision, (
         f"the packaged build excludes modules the figures need: {sorted(collision)}"
     )
+
+
+def test_first_run_does_not_tell_a_packaged_user_to_run_python(qtbot, monkeypatch, tmp_path):
+    """The first screen a new user sees used to be two ways of saying "broken".
+
+    With no database yet -- the normal state for the first few minutes after
+    installing -- Stage 1 showed `python -m telemetry install`, which somebody
+    who downloaded a packaged ZIP has no Python to run, beside a raw sqlite
+    error string. The installation was working exactly as intended.
+    """
+    from desktop.state import AppState
+    from desktop.views.stage1_view import Stage1View
+    from pipeline import engine
+
+    def no_database(*args, **kwargs):
+        raise Exception("unable to open database file")
+
+    monkeypatch.setattr(engine, "baseline_readiness", no_database)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    view = Stage1View(AppState())
+    qtbot.addWidget(view)
+    view.refresh_status()
+
+    shown = f"{view.remaining_label.text()} {view.status_label.text()}".lower()
+    assert "python -m" not in shown, shown
+    assert "unable to open database" not in shown, shown
+    assert "check back" in shown or "waiting" in shown, shown
+    assert view.train_button.isEnabled() is False
+
+
+def test_the_wait_for_a_baseline_shows_progress(qtbot, monkeypatch):
+    """A day of "wait" that never moves looks identical to a stalled app."""
+    from desktop.state import AppState
+    from desktop.views.stage1_view import Stage1View
+    from pipeline import engine
+    from telemetry.analysis import BaselineStatus
+
+    monkeypatch.setattr(engine, "baseline_readiness", lambda path, window_size=12: BaselineStatus(
+        clean_samples=628, clean_days=0.2,
+        uninterrupted_samples=628, current_run_samples=628, required_samples=2512,
+        ready=False, days_remaining=0.65))
+
+    view = Stage1View(AppState())
+    qtbot.addWidget(view)
+    view.refresh_status()
+
+    # 628 of 2,512 is a quarter of the way there, and must be said so.
+    assert "25%" in view.remaining_label.text(), view.remaining_label.text()
+    assert view.progress_bar.value() == 25
