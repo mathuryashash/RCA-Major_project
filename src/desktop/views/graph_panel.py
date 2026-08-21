@@ -31,6 +31,20 @@ class PlotlyWebView(QWidget):
     opened full screen.
     """
 
+    #: A preferred height, not a floor. Inside a scroll area Qt sizes the page
+    #: to its content's sizeHint, and a QWebEngineView asks for roughly 700px
+    #: by default -- two of them put the results panel at 775px, which pushed
+    #: Stage 2 past the window and produced a second scrollbar beside the ones
+    #: the figures and tables already have. Asking for less lets the page fit
+    #: on a normal display while the size policy still expands the figure to
+    #: fill whatever room there is.
+    PREFERRED_HEIGHT = 340
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        hint.setHeight(self.PREFERRED_HEIGHT)
+        return hint
+
     def __init__(self, parent=None, title: str = "", legend: str = ""):
         super().__init__(parent)
         layout = QVBoxLayout(self)

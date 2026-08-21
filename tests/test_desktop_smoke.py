@@ -850,3 +850,39 @@ def test_structural_borders_meet_wcag_non_text_contrast():
 
     # And the thing that was always fine must stay fine.
     assert _contrast(theme.TEXT, theme.SURFACE) >= 4.5
+
+
+def test_no_nested_scrollbars_on_a_normal_display(qtbot):
+    """Two scrollbars in the same corner read as the panel sliding under itself.
+
+    Wrapping each tab in a scroll area fixed clipping at small sizes and
+    introduced this: the channels table demanded 430px and the two Plotly
+    figures ~700px each, so the page overflowed even on a large display and
+    grew a second bar beside the ones the tables and figures already have.
+
+    The rule is not "never scroll" -- it is "do not scroll when there is
+    clearly room". Below the layout's natural size scrolling is correct, and
+    is what keeps the content reachable at all.
+
+    Asserted on sizeHint rather than on scrollbar visibility: what the content
+    *asks for* is computed synchronously, while whether a bar is currently
+    painted depends on how far the event loop has got, which made this pass
+    alone and fail in the full suite.
+    """
+    from desktop.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+
+    viewport_height = 1000 - 150          # window minus header, tab bar, margins
+    for index in range(window.tabs.count()):
+        inner = window.tabs.widget(index).widget()
+        wanted = inner.sizeHint().height()
+        assert wanted <= viewport_height, (
+            f"tab '{window.tabs.tabText(index)}' wants {wanted}px on a 1000px-tall "
+            f"window, so the page scrolls and puts a second bar beside its own"
+        )
+
+    # ...and the content must still be reachable when the window really is small.
+    assert window.minimumSizeHint().height() <= 640

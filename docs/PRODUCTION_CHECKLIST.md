@@ -252,6 +252,11 @@ published SHA256.
       of width, and no view scrolled, so content was clipped with no way to
       reach it. Every tab is now in a scroll area and unwrapped labels no
       longer set the floor. Window minimum: **1155×180 → 532×180**
+- [x] **No nested scrollbars on a normal display** — every tab was wrapped in
+      a scroll area to stop clipping at small sizes, which then put a
+      page-level bar beside the ones tables and figures already carry. Figures
+      ask for 340px and expand to fill; measured, no outer scrollbar at
+      1900×1000 and scrolling intact at 1366×768 and below
 - [ ] **Multi-monitor** — full-screen dialog on the correct display
 - [x] **Focus indicators on every focusable control** — a stylesheet
       background stops Qt drawing the native focus rectangle, so styling a

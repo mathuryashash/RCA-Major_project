@@ -654,6 +654,58 @@ next experiment took to contradict it. The elaborate workarounds were reverted
 and the rule is four lines. The regression test activates the window
 explicitly, and was confirmed to fail when either rule is removed.
 
+### 5.2.2 Layout, and three attempts to fix it
+
+The interface work in this project has a poorer record than the pipeline work,
+and the reason is worth stating: **none of it is reachable by the test suite in
+the form the user meets it.** 130 tests pass with the layout correct and with
+it visibly broken.
+
+Three defects arrived in sequence, each introduced by the fix before it.
+
+**The window could not render its declared minimum.** `setMinimumSize(1024,
+640)` was set, while Stage 2 asked for 1168px of height and the Captured Data
+table for 1752px of width, and no view sat in a scroll area — so at the minimum
+size content was simply clipped, with no way to reach it. The same arithmetic
+reaches anyone at 150% display scaling, which is the common configuration on a
+Windows laptop rather than an edge case.
+
+**Fixing that broke the header.** An unwrapping label in the header set the
+window's real floor at 1155px, so it was given `setWordWrap(True)` and a
+minimum width of 1 — while a trailing spacer continued to take all the spare
+width. Qt duly handed the label its minimum and wrapped it to **one word per
+line**, a thin vertical column beside the title. The instinct was right and the
+layout arithmetic was not.
+
+**Fixing that exposed nested scrollbars.** With every tab in a scroll area, any
+content taller than the window produced a page-level bar beside the ones the
+tables and figures already carry — two bars in the same corner, which reads as
+the panel sliding under itself. The causes were a channels table demanding
+430px and two `QWebEngineView` figures asking for roughly 700px each, putting
+the results panel at 775px on a display with room to spare.
+
+The resolution is that a preferred size is not a minimum: the figures now ask
+for 340px and expand to fill whatever room exists — measured, 480px on a
+1900×1000 window — so the page fits when it can and scrolls only when it must.
+
+| window | outer scrollbars |
+|---|---|
+| 1900×1000 | none on any tab |
+| 1366×768 | all three tabs |
+| 1024×640 | all three tabs |
+
+**What made this expensive was measuring the wrong thing.** Two of the three
+were "verified" against offscreen geometry that did not reflect what a screen
+would show — `resize()` before `show()` is silently ignored offscreen, so an
+early check ran at 796px and reported wrapping that does not occur at 1900px.
+The defects were found by rendering the window to an image and looking at it,
+which is the only method here that has worked reliably.
+
+The regression test asserts on `sizeHint` rather than on whether a scrollbar is
+currently painted. Visibility depends on how far the event loop has run, which
+made the first version pass in isolation and fail in the full suite — a test
+that reports on scheduling rather than on layout.
+
 ### 5.3 What the report refuses to say
 
 Four distinct outcomes are reported differently, and collapsing them was the
@@ -1695,9 +1747,12 @@ Ordered by how much they constrain what this system can claim.
 
 **Interface**
 
-13. **Contrast on structural borders fails WCAG SC 1.4.11** — 1.32:1 on
-    `BORDER`, 1.07:1 on row striping. Text contrast passes comfortably; it is
-    the frames and gridlines that are nearly invisible.
+13. **Interface defects are not reachable by the test suite** in the form a
+    user meets them. 130 tests pass with the layout correct and with it
+    visibly broken; three layout defects in a row were each introduced by the
+    fix before them, and were found by rendering the window to an image rather
+    than by any assertion (§5.2.2). Structural contrast now passes SC 1.4.11 at
+    3.07:1, up from 1.32:1.
 14. **Untested at non-100% DPI, on small screens, and with a screen reader.**
     Keyboard focus is now verified on all eight focusable control types by
     rendering, but nothing has been tried with assistive technology.
