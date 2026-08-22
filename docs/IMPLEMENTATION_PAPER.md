@@ -62,10 +62,12 @@ more testing, and §10.5 argues why.
 
 The engineering is sound where it has been measured, and the application runs:
 a packaged build was launched and observed responding with memory plateauing at
-511 MB, and the pipeline processed 92 real incidents end to end in 1.7 minutes.
-What prevents wide distribution is not code but procurement and product
-decisions — the binaries are unsigned, there is no update mechanism, and the
-no-egress promise is irreconcilable with crash reporting.
+427 MB, and the pipeline processed 92 real incidents end to end in 1.7 minutes.
+Version 1.5.0 was published on 2026-08-22 as a 272 MB download. What still
+limits distribution is not code but procurement: the binaries are unsigned, so
+every user meets a SmartScreen warning, and the no-egress promise remains
+irreconcilable with crash reporting — a defect on a stranger's machine is
+invisible unless they send the log themselves.
 
 ---
 
@@ -1609,12 +1611,29 @@ PyInstaller `--onedir`, two executables, unsigned.
 | SHA256 | `24D1D091DDB60A27D5EA79F0E90A5CDECABD7F213DCA3AEC459BA8B386720B65` |
 | Install | extract → run → agree |
 
-Two builds have been discarded rather than shipped, on the same principle:
-1.2.0, superseded before release by the ordering fix in §8.4, and a first cut
-of 1.3.0, superseded by the corrections in §6.3.2 and the gate change above.
-An artifact whose checksum appears in a document, but whose code has since
-moved, is the kind of thing someone later trusts by mistake. Discarding a
-finished 433 MB build twice is cheaper than that.
+**Published 2026-08-22**, at
+`github.com/mathuryashash/RCA-Major_project/releases/tag/v1.5.0`. Before that
+point the project had produced twelve releases and published exactly one, an
+early v1.0.0 that was deleted when 1.5.0 went out: it predated the attribution
+fix that made memory-bound causes nameable at all, bounded storage, corruption
+recovery, the pause control and every layout fix, and it had been sitting on
+the repository as "Latest" throughout.
+
+Four finished builds were discarded rather than shipped, on a single
+principle: an artifact whose checksum appears in a document, while its code has
+since moved, is the kind of thing someone later trusts by mistake. 1.2.0 was
+superseded by the process-ordering fix, a first cut of 1.3.0 by the storage
+corrections, 1.4.0 by three layout regressions, and 1.4.1 by the size work.
+Throwing away a 433 MB build four times is cheaper than publishing a checksum
+that describes something else.
+
+One packaging error survived that discipline and is worth recording because it
+is exactly what the discipline exists to prevent: the release notes for 1.4.1
+carried **1.4.0's SHA256**, because the notes were copied and the filenames
+updated while the hash was not. It was caught before publication, and the
+notes for 1.5.0 were written with a `PENDING_SHA256` placeholder that the
+build fills in, so the value cannot be inherited from a previous release
+again.
 
 Registration is per-user and needs no elevation: a Startup-folder logon entry,
 a Start menu shortcut (so Windows search can find the app), and an
@@ -1941,11 +1960,15 @@ distinguishes a correct causal answer from a correct severity answer. And
 observing a retention purge actually run, because everything about bounded
 storage is currently unit-tested and unwitnessed.
 
-**What would make it shippable** is not engineering. The binaries are
-unsigned, so every user meets a SmartScreen warning; there is no update
-mechanism, so a defect shipped is permanent; and crash reports cannot reach
-anyone without breaking the promise the system is built on. Those are a
-purchase and two product decisions.
+**What still limits it** is largely not engineering. Two of the three barriers
+named in earlier revisions have been addressed: the application can now check
+for a newer release (§8.10), and the download has fallen by a third (§6.3.3).
+The one that remains is a purchase. The binaries are unsigned, so every user
+meets a SmartScreen warning from an unknown publisher, and no amount of
+engineering substitutes for a certificate. Crash reports still cannot reach
+anyone without breaking the promise the system is built on, which is a
+deliberate trade rather than an omission: a defect on a stranger's machine is
+invisible unless that person sends the log.
 
 The most durable result here is methodological. A tool that reports "no causal
 chain was supported" when the data cannot support one is more useful than a

@@ -5,34 +5,83 @@ is written outside your own user profile.
 
 ---
 
+## What it will cost you
+
+Decide before downloading, not afterwards:
+
+| | |
+|---|---|
+| Download | **272 MB** (ZIP) |
+| After extraction | **731 MB** |
+| Collected data | **~3.3 MB per day**, capped by retention |
+| Memory while open | ~430 MB |
+| Before it is useful | **~21 hours** of collection |
+
+Most of what remains is PyTorch, which runs the model: 351 MB of the 731. The
+figures used to add roughly another 360 MB of bundled web browser, which
+version 1.5.0 removed by drawing them natively instead.
+
+The data footprint is bounded — metrics expire after 365 days, process detail
+and the foreground-application record after 30 — and freed space is returned
+to the filesystem rather than left inside the database file.
+
+## About the SmartScreen warning
+
+**This build is not code-signed, and Windows will say so.** You will see
+*"Windows protected your PC"* with an *Unknown publisher*.
+
+That warning is Windows telling you the truth: nobody has paid a certificate
+authority to vouch for this binary. A code-signing certificate costs a few
+hundred dollars a year, and this project does not have one.
+
+If you choose to proceed, verify what you downloaded first — that is what the
+checksum in step 1 is for. It confirms the file is byte-for-byte what was
+published, which is the assurance signing would otherwise give you. If you are
+not comfortable with that, building from source is a reasonable alternative and
+is documented in the README.
+
+---
+
 ## 1. Get the release
 
 Download `LocalRCA-vX.Y.Z-windows-x64.zip` from the
-[Releases page](https://github.com/mathuryashash/RCA-Major_project/releases)
-and extract **the whole ZIP** to a folder you can write to, for example
-`C:\LocalRCA`.
+[Releases page](https://github.com/mathuryashash/RCA-Major_project/releases).
+
+**Verify it before running it:**
+
+```powershell
+Get-FileHash LocalRCA-vX.Y.Z-windows-x64.zip -Algorithm SHA256
+```
+
+Compare the result with the SHA256 published beside the download. If they
+differ, stop — the file is not what was released.
+
+Then extract **the whole ZIP** to a folder you can write to, such as
+`C:\LocalRCA`. Right-click the ZIP and choose **Extract All**; opening the ZIP
+and dragging one file out will not work, because the application needs the
+runtime folder beside it.
 
 You should end up with:
 
 ```
-C:\LocalRCA\
-├── RCA-Desktop\
-│   ├── RCA-Desktop.exe        ← the application
+C:\LocalRCA├── Install LocalRCA.bat       ← start here
+├── RCA-Desktop│   ├── RCA-Desktop.exe        ← the application
 │   └── _internal\             ← runtime; must stay beside the .exe
-└── RCA-Collector\
-    ├── RCA-Collector.exe      ← the background collector
-    └── _internal\
-```
+└── RCA-Collector    ├── RCA-Collector.exe      ← the background collector
+    └── _internal```
 
-Do not move either `.exe` out of its folder. Move the whole folder if you
-need to relocate it.
-
-Windows may show a SmartScreen prompt: the build is unsigned. Check the
-release is published from this repository before choosing **Run anyway**.
+Do not move either `.exe` out of its folder. Move the whole folder if you need
+to relocate it.
 
 ## 2. Start the application
 
-Run `RCA-Desktop\RCA-Desktop.exe`.
+**Double-click `Install LocalRCA.bat`.** It checks the ZIP was extracted
+properly rather than opened, warns if the drive is short of space, explains
+what agreeing will set up, and then starts the application.
+
+If you would rather not run a batch file, run
+`RCA-Desktop\RCA-Desktop.exe` directly — it does the same thing without the
+checks.
 
 > **The first launch is slow — around a minute — and that is expected.**
 > Windows Defender scans several thousand freshly extracted files the first

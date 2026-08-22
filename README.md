@@ -118,7 +118,7 @@ could not claim as causal, and said so.
 
 
 1. Open the repository's [Releases page](https://github.com/mathuryashash/RCA-Major_project/releases).
-2. Download `LocalRCA-vX.Y.Z-windows-x64.zip` and extract the entire ZIP to a folder you can write to, such as `C:\LocalRCA`.
+2. Download `LocalRCA-v1.5.0-windows-x64.zip` (272 MB) and extract the entire ZIP to a folder you can write to, such as `C:\LocalRCA`, then double-click `Install LocalRCA.bat`.
 3. Run `RCA-Desktop\RCA-Desktop.exe`. On first launch it shows exactly what
    will be recorded and asks whether to begin. Nothing is collected until you
    agree.
@@ -240,7 +240,17 @@ recorded before it existed.
 
 ## Privacy
 
-Everything stays on the machine. The collector opens no sockets.
+Collected telemetry never leaves the machine. **The collector opens no sockets
+under any configuration** — that part of the claim is structural, enforced by
+the absence of network code in the collection path.
+
+One deliberate exception, added in 1.5.0 and stated here rather than buried:
+**the desktop app can check whether a newer release exists.** It is off until
+you turn it on, asks first in plain terms, runs only when you press the button,
+sends no identifier and no telemetry, downloads nothing, and reads exactly one
+number — the newest release tag. Everything else about the promise is
+unchanged; describing it as "makes no network connections" would no longer be
+true, so it is not described that way.
 
 **There is an off switch.** *Captured Data → Pause collection* stops recording
 within about 30 seconds and stays stopped across restarts until you resume.
