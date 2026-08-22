@@ -72,7 +72,8 @@ that records system telemetry on a single machine, learns that machine's
 normal behaviour with an LSTM autoencoder, and attempts to explain incidents
 using Granger causality constrained by false-discovery-rate correction, an
 effect-size floor and a subsystem topology prior. The system runs entirely on
-the endpoint and makes no network connections. Because a personal machine
+the endpoint; the collector opens no sockets, and the only network capability
+is an opt-in, off-by-default check for a newer release that transmits nothing. Because a personal machine
 offers no labelled incidents, we evaluate in two ways: seven controlled fault
 injections, which supply ground truth by construction, and a population survey
 that replays the pipeline over 210 incidents discovered in real collected
