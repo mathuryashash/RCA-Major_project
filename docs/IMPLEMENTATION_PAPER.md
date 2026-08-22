@@ -2,7 +2,7 @@
 
 **An implementation paper**
 
-Version 1.4.1 · revised 2026-08-21
+Version 1.5.0 · revised 2026-08-22
 
 ---
 
@@ -12,8 +12,10 @@ LocalRCA is a Windows desktop application that continuously records system
 telemetry on a single machine, learns that machine's normal behaviour with an
 LSTM autoencoder, and — after an incident — attempts to explain what went
 wrong using constrained Granger causality over the anomalous metrics. It runs
-entirely on the endpoint: no telemetry leaves the machine, and the system makes
-no network connections.
+entirely on the endpoint: no telemetry leaves the machine, and the collector
+opens no sockets under any configuration. The desktop application carries one
+opt-in exception, off by default -- a check for a newer release that reads a
+version number and sends nothing (§3.4).
 
 This paper documents what was built, what was measured, and where the
 measurements contradict the design's assumptions. Every figure comes from
@@ -231,8 +233,15 @@ retaining what was skipped.
 Event message text is stored only under an explicit opt-in, and is redacted
 first for user paths, UNC paths, URLs, email addresses and the username.
 Window titles, keystrokes, clipboard and file contents are never captured.
-There is no network code anywhere in the source; the privacy claim is
-structural rather than policy-based.
+The collector contains no network code at all, so its privacy property is
+structural rather than policy-based. The desktop application gained one
+deliberate exception in 1.5.0: an opt-in check for a newer release, off by
+default, which reads a version tag and sends nothing. That exists because a
+system with no update path keeps every defect it ships forever, and this
+project has documented enough of those to make that trade a bad one. The
+claim is therefore stated precisely -- collected telemetry never leaves the
+machine, and the collector never opens a socket -- rather than as a blanket
+"no network connections", which the update check would make false.
 
 **The protection was inverted, and has been corrected.** `foreground_app` — the
 name of the application in focus — is sampled every 30 seconds alongside
@@ -901,6 +910,73 @@ itself: **745 → 0**.
 
 Three further findings are recorded in §10.5.
 
+### 6.3.3 Removing a browser to draw two charts
+
+The largest single component of the installed application was not the model,
+the runtime or the data. It was a web browser.
+
+Figures were built with Plotly, which renders to HTML and therefore needs
+something to display HTML. That something was QtWebEngine:
+
+| Component | Size |
+|---|---|
+| WebEngine DLLs | 258 MB |
+| WebEngine resources | 29 MB |
+| Qt translations | 53 MB |
+| `opengl32sw.dll` (software fallback) | 20 MB |
+| **total** | **~360 MB** |
+
+About a third of a 1,110 MB installation existed so that two charts could be
+drawn. Matplotlib renders the same two figures into a native Qt canvas for the
+28 MB it costs, and the application already had matplotlib available.
+
+| | before | after |
+|---|---|---|
+| Download (ZIP) | 433 MB | **272 MB** |
+| Installed | 1,110 MB | **731 MB** |
+| PySide6 alone | 461 MB | **92 MB** |
+| GUI resident memory | 542 MB | **473 MB** |
+
+Two properties improved as side effects rather than by design. Figures had
+been written to temporary HTML files and loaded over `file://`, which left
+**rendered metric values in the user's temp directory** and required
+`delete-all-data` to clean them up explicitly; that path no longer exists. And
+pan and zoom now come from the standard matplotlib toolbar rather than from
+JavaScript. The measurable loss is hover tooltips.
+
+**Three packaging defects surfaced, all with the same signature.** The build
+succeeded, the application launched, the collector ran, and the failure waited
+for someone to draw a figure:
+
+1. `matplotlib` was on the exclude list, left from when the application used
+   Plotly and matplotlib was dead weight.
+2. `cycler`, `contourpy`, `fontTools` and `kiwisolver` — matplotlib's own
+   dependencies — were excluded for the same reason.
+3. The fix for (2) **silently missed one**. The entry is `fontTools` with a
+   capital T; a case-sensitive replacement matched nothing and reported
+   success having done nothing.
+
+None is reachable by launching the application and looking at it, which is
+precisely the check that would otherwise have been used to call the build
+good. The first two were found by reading `desktop.log` after launch; the
+third by a test.
+
+**The guard test is the part worth keeping.** Its first version named three
+modules by hand and passed while four required packages were still excluded.
+Rewritten to ask `importlib.metadata` what matplotlib actually declares, and
+to compare case-insensitively against the exclude list, it immediately caught
+the `fontTools` case bug that the fix had missed. The difference is between a
+test encoding what the author remembered and one that interrogates the system.
+
+A claim made during this work was also wrong and is corrected here.
+`matplotlib.backends.backend_qtagg` was reported missing from the bundle on
+the evidence that `_internal/matplotlib/backends/` held a single file. Pure
+Python modules live in the PYZ archive rather than as loose files, so looking
+for them on disk finds nothing whether they are present or not; the build
+manifest confirms it was always there. The hidden import added in response
+remains as insurance against a future refactor moving the import behind
+`matplotlib.use()`, not as a fix for a defect that existed.
+
 ### 6.4 What actually binds
 
 **Training compute is not a limiting factor.** Even maximal settings complete
@@ -1474,16 +1550,63 @@ exercised yet, rather than by what seems likely to succeed.
 
 ---
 
+### 8.10 Three product changes, and a promise that had to be rewritten
+
+Three changes were made for the sake of someone who is not the author, and one
+of them required restating a claim this project had made absolutely.
+
+**An off switch.** The application records which programs are in use every 30
+seconds, and the only way to stop it was to uninstall. For software whose case
+rests on privacy that is not defensible, and the mechanism already existed:
+both the collector and its supervisor poll a stop flag. It had simply never
+been offered to the person being recorded. Resuming deliberately restores
+*supervision* rather than just the collector, because the flag ends the
+supervisor's loop too, and bringing back a bare collector would leave it
+unsupervised until the next logon — working, but quietly weaker than before.
+
+**A first run that does not look broken.** With no database yet — the normal
+state for the first minutes after installing — Stage 1 displayed
+`python -m telemetry install` beside a raw `unable to open database file`.
+Someone who downloaded a packaged ZIP has neither Python nor the module, so
+the first screen a new user saw was an impossible instruction next to what
+reads as a crash, while the installation was working exactly as intended. A
+frozen build now says collection starts on its own and to check back in about
+a day; a source build still gets the command, because there it is correct.
+The 21-hour wait also shows progress — *"25% collected — about 0.7 days to
+go"* — since a screen that says "wait" and never visibly moves is
+indistinguishable from one that has stopped working.
+
+**An update check, and the cost of having one.** A system with no update path
+keeps every defect it ships. Given the nine defects documented in §10, that
+trade was a bad one, so the desktop application gained an opt-in check that
+reads the newest release tag and nothing else: off until enabled, asked once
+in plain terms, run only on a button press, no identifier, no download, no
+request body and no query string. Tests assert each of those properties,
+because a version check is exactly the kind of feature that becomes telemetry
+by accretion.
+
+**It made a documented claim false, so the claim changed.** Five documents
+stated that the application "makes no network connections". That is no longer
+true, and the honest repair is not to hide the socket but to describe the
+system precisely: *collected telemetry never leaves the machine, and the
+collector opens no sockets under any configuration*, with the opt-in exception
+named wherever the guarantee is given. The collector's property remains
+structural — there is no network code in the collection path at all — while
+the desktop application's is now conditional on a choice the user makes. That
+distinction is worth more than the simpler sentence it replaced.
+
+---
+
 ## 9. Distribution
 
 PyInstaller `--onedir`, two executables, unsigned.
 
 | Property | Value |
 |---|---|
-| Version | 1.4.1 |
-| Installed size | 1,109 MB (from 1,538 MB) |
-| Release ZIP | 433.4 MB |
-| SHA256 | `BD9792028F6F8001CBBCDB4B4E0C51DBD737D87CDB3ECE4CE37DBCF61D280EED` |
+| Version | 1.5.0 |
+| Installed size | **731 MB** (from 1,110 MB; see §6.3.3) |
+| Release ZIP | **272.3 MB** |
+| SHA256 | `24D1D091DDB60A27D5EA79F0E90A5CDECABD7F213DCA3AEC459BA8B386720B65` |
 | Install | extract → run → agree |
 
 Two builds have been discarded rather than shipped, on the same principle:
@@ -1738,7 +1861,7 @@ Ordered by how much they constrain what this system can claim.
 **Distribution**
 
 10. **Unsigned**, confirmed `NotSigned`, so every user meets a SmartScreen
-    warning on a 433 MB download from an unknown publisher. This is the single
+    warning on a 272 MB download from an unknown publisher. This is the single
     largest barrier to distribution and it is not an engineering problem.
 11. **No update mechanism.** A defect shipped is a defect that stays, which
     given the defect rate documented in §10 is the risk worth weighing most.
@@ -1756,9 +1879,14 @@ Ordered by how much they constrain what this system can claim.
 14. **Untested at non-100% DPI, on small screens, and with a screen reader.**
     Keyboard focus is now verified on all eight focusable control types by
     rendering, but nothing has been tried with assistive technology.
-15. **The first day is empty.** Roughly 21 hours of clean collection are
-    required before training unlocks, and the application offers nothing to do
-    meanwhile — no sample dataset, no preview.
+15. **The first day is still empty**, though it now says so usefully.
+    Roughly 21 hours of clean collection are required before training unlocks;
+    progress is shown as a percentage rather than a static "wait" (§8.10), but
+    there is no sample dataset and nothing to explore meanwhile.
+16. **`torch` is now half the build.** After removing QtWebEngine it accounts
+    for 351 MB of 731 MB, to run a 0.52 MB model on the CPU. A CPU-only wheel
+    or an ONNX runtime for inference could plausibly halve the build again and
+    has not been attempted.
 
 ## 12. Conclusion
 
