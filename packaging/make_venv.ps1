@@ -67,8 +67,16 @@ if (-not (Test-Path $venvPython)) {
 Write-Host "Syncing $VenvDir to requirements-dev.lock ..."
 # sync, not install: anything not in the lock is uninstalled, so the build
 # cannot quietly depend on a package somebody added by hand.
-& $uv pip sync --python $venvPython --index-strategy unsafe-best-match --require-hashes requirements-dev.lock
-if ($LASTEXITCODE -ne 0) { throw "uv pip sync failed (exit $LASTEXITCODE)" }
+# uv writes progress to stderr. Under $ErrorActionPreference = "Stop",
+# Windows PowerShell 5.1 turns native stderr into a terminating error as soon
+# as output is redirected (a logged or unattended build), so the sync "failed"
+# on its own progress line. The exit code is the real signal; check that.
+$ErrorActionPreference = "Continue"
+& $uv pip sync --python $venvPython --index-strategy unsafe-best-match --require-hashes requirements-dev.lock 2>&1 |
+    ForEach-Object { Write-Host "$_" }
+$syncExit = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($syncExit -ne 0) { throw "uv pip sync failed (exit $syncExit)" }
 
 # The whole point of this venv. Fail here, in seconds, rather than after a
 # ten-minute build that produces a 2 GB zip.

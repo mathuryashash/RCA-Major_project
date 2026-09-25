@@ -52,11 +52,25 @@ foreach ($leftover in 'build', 'dist') {
     }
 }
 
-# $ErrorActionPreference does not apply to native executables in PowerShell 5.1,
-# so a failed PyInstaller run has to be caught by its exit code.
+# PyInstaller logs everything to stderr. Under $ErrorActionPreference = "Stop",
+# Windows PowerShell 5.1 turns that stderr into a terminating error the moment
+# output is redirected -- a logged or unattended build, CI -- so the build
+# "failed" on its first INFO line. Run native tools with Continue, and judge
+# them by exit code, which is the only reliable signal.
+function Invoke-Native([string]$What, [scriptblock]$Command) {
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Command 2>&1 | ForEach-Object { Write-Host "$_" }
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $saved
+    }
+    if ($code -ne 0) { throw "$What failed (exit $code)" }
+}
+
 Write-Host "Running PyInstaller..."
-& $venvPython -m PyInstaller packaging\rca_desktop.spec --noconfirm
-if ($LASTEXITCODE -ne 0) { throw "Desktop build failed (exit $LASTEXITCODE)" }
+Invoke-Native "Desktop build" { & $venvPython -m PyInstaller packaging\rca_desktop.spec --noconfirm }
 
 $collectorArgs = @(
     'src\telemetry\collector_entry.py',
@@ -81,8 +95,7 @@ $collectorArgs += Get-Content 'packaging\excludes.txt' |
     Where-Object { $_ -and -not $_.StartsWith('#') } |
     ForEach-Object { '--exclude-module', $_ }
 
-& $venvPython -m PyInstaller @collectorArgs
-if ($LASTEXITCODE -ne 0) { throw "Collector build failed (exit $LASTEXITCODE)" }
+Invoke-Native "Collector build" { & $venvPython -m PyInstaller @collectorArgs }
 
 # The regression this venv exists to prevent. make_venv.ps1 already refuses a
 # CUDA torch, but catch it on the output too: a hook or a stray path could
@@ -101,7 +114,10 @@ if ($cudaDlls) {
 $arp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LocalRCA'
 if (Test-Path $arp) {
     Write-Host "Restoring the Start menu shortcut..."
-    & .\dist\RCA-Collector\RCA-Collector.exe install | Out-Null
+    # Cosmetic: a failure here must not fail a build that has already succeeded.
+    $ErrorActionPreference = "Continue"
+    & .\dist\RCA-Collector\RCA-Collector.exe install 2>&1 | Out-Null
+    $ErrorActionPreference = "Stop"
 }
 
 Write-Host "Build complete: dist\RCA-Desktop\RCA-Desktop.exe and dist\RCA-Collector\RCA-Collector.exe"
