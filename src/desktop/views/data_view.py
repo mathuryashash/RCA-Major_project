@@ -1,5 +1,8 @@
 """Show what the collector is actually capturing, and how much of it."""
 
+import time
+from datetime import datetime
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton,
@@ -39,6 +42,45 @@ CHANNELS = [
     ("user_idle_sec", "Context", "Idle time", "s"),
     ("foreground_app", "Context", "Foreground app", ""),
 ]
+
+
+#: How old the newest sample may be before collection is reported as stopped.
+#: Ten missed ticks: long enough to ride out a supervisor restart (fifteen
+#: seconds of backoff plus startup) and the first tick after the machine
+#: wakes, short enough that a dead collector is flagged within minutes rather
+#: than the hour it once went unnoticed behind "Collecting every 30 seconds".
+STALE_AFTER_S = 10 * config.SYSTEM_CADENCE_S
+
+#: How long after a restart click to keep saying "waiting" before admitting
+#: the restart did not work. A few ticks, plus the collector's own startup.
+RESTART_GRACE_S = 6 * config.SYSTEM_CADENCE_S
+
+
+def sample_age_s(last_ts, now: float | None = None) -> float | None:
+    """Seconds since the newest stored sample, or None if there is none."""
+    if last_ts is None:
+        return None
+    now = time.time() if now is None else now
+    return max(0.0, now - last_ts.timestamp())
+
+
+def describe_age(seconds: float) -> str:
+    """Minutes, hours or days, rounded -- precise enough to act on."""
+    minutes = seconds / 60
+    if minutes < 90:
+        value, unit = round(minutes), "minute"
+    elif minutes < 48 * 60:
+        value, unit = round(minutes / 60), "hour"
+    else:
+        value, unit = round(minutes / 1440), "day"
+    return f"{value} {unit}{'s' if value != 1 else ''}"
+
+
+def _local_clock(last_ts, now: float) -> str:
+    """When the last sample landed, in the user's own time zone."""
+    stamp = datetime.fromtimestamp(last_ts.timestamp())
+    same_day = stamp.date() == datetime.fromtimestamp(now).date()
+    return stamp.strftime("%H:%M" if same_day else "%Y-%m-%d %H:%M")
 
 
 def _human_bytes(value: float) -> str:
@@ -143,6 +185,16 @@ class DataView(QWidget):
         self.pause_button.clicked.connect(self._toggle_collection)
         self.collection_state = QLabel("")
         self.collection_state.setWordWrap(True)
+        # Offered only while collection has stopped without being paused.
+        # The supervisor is meant to make this unnecessary, and it failed
+        # anyway -- a rebuild deleted the collector and it quit for good -- so
+        # the fallback has to be one click, not a command line.
+        self.restart_button = QPushButton("Restart collection")
+        self.restart_button.setAccessibleName("Restart telemetry collection, which has stopped")
+        self.restart_button.clicked.connect(self._restart_collection)
+        self.restart_button.setVisible(False)
+        self._last_sample_ts = None
+        self._restart_requested_at: float | None = None
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh)
         # The only control in this application that can open a socket, so it
@@ -151,6 +203,7 @@ class DataView(QWidget):
         self.update_button.setAccessibleName("Check online for a newer release")
         self.update_button.clicked.connect(self._check_for_update)
         controls.addWidget(self.pause_button)
+        controls.addWidget(self.restart_button)
         controls.addWidget(self.refresh_button)
         controls.addWidget(self.update_button)
         controls.addWidget(self.collection_state, stretch=1)
@@ -164,6 +217,11 @@ class DataView(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
         self._timer.start(30_000)
+        # Parented to the view so it dies with it; a bare singleShot would
+        # call refresh() on a widget that may already have been destroyed.
+        self._recheck = QTimer(self)
+        self._recheck.setSingleShot(True)
+        self._recheck.timeout.connect(self.refresh)
 
     def set_advanced(self, enabled: bool):
         self.store_box.setVisible(enabled)
@@ -230,12 +288,57 @@ class DataView(QWidget):
         try:
             if schedule.collection_paused():
                 schedule.resume_collection()
+                # The newest sample is still from before the pause, so without
+                # this the next refresh would call a resumed collector stopped.
+                self._restart_requested_at = time.monotonic()
             else:
                 request_stop()
+                self._restart_requested_at = None
         except Exception as exc:  # noqa: BLE001 - the view must survive either way
             self.collection_state.setText(f"Could not change collection: {exc}")
             return
         self._refresh_collection_state(just_toggled=True)
+
+    def _restart_collection(self):
+        """Relaunch a collector that stopped without being asked to."""
+        try:
+            started = schedule.restart_collection()
+        except Exception as exc:  # noqa: BLE001 - the view must survive either way
+            started, reason = False, str(exc)
+        else:
+            reason = "the collector executable could not be found"
+        if not started:
+            self._set_collection_text(f"Could not restart collection: {reason}.", error=True)
+            return
+        self._restart_requested_at = time.monotonic()
+        self._refresh_collection_state()
+        self._refresh_stall_summary()
+        # Check back once the first tick should have landed, rather than
+        # leaving the user to wait for the regular thirty-second refresh.
+        self._recheck.start(int(2 * config.SYSTEM_CADENCE_S * 1000))
+
+    def stalled_for_s(self, now: float | None = None) -> float | None:
+        """How long collection has been stopped, or None if it has not.
+
+        Paused is not stopped: the user asked for that, and the view already
+        says so. Nor is an empty store -- that is "not started yet", which has
+        its own message.
+        """
+        try:
+            if schedule.collection_paused():
+                return None
+        except Exception:  # noqa: BLE001
+            return None
+        age = sample_age_s(self._last_sample_ts, now)
+        return age if age is not None and age > STALE_AFTER_S else None
+
+    def _set_collection_text(self, text: str, error: bool = False):
+        # errorText is the existing red used for failures elsewhere in the app.
+        self.collection_state.setText(text)
+        name = "errorText" if error else ""
+        if self.collection_state.objectName() != name:
+            self.collection_state.setObjectName(name)
+            self._repolish(self.collection_state)
 
     def _refresh_collection_state(self, just_toggled: bool = False):
         try:
@@ -243,24 +346,90 @@ class DataView(QWidget):
         except Exception:  # noqa: BLE001
             return
         self.pause_button.setText("Resume collection" if paused else "Pause collection")
+        cadence = config.SYSTEM_CADENCE_S
         if paused:
-            self.collection_state.setText(
-                "Paused. The collector stops within about 30 seconds and stays "
-                "stopped across restarts until you resume. Data already "
+            self.restart_button.setVisible(False)
+            self._set_collection_text(
+                f"Paused. The collector stops within about {cadence} seconds and "
+                "stays stopped across restarts until you resume. Data already "
                 "collected is kept."
                 if just_toggled else
                 "Collection is paused. Nothing new is being recorded."
             )
-        else:
-            self.collection_state.setText(
+            return
+
+        # "Collecting" was only ever inferred from the absence of a pause. The
+        # collector can also simply not be running, and when a rebuild took it
+        # away for an hour this line kept promising samples every 30 seconds.
+        # The age of the newest sample is the one thing that cannot lie.
+        stalled = self.stalled_for_s()
+        waiting = (
+            self._restart_requested_at is not None
+            and time.monotonic() - self._restart_requested_at < RESTART_GRACE_S
+        )
+        if stalled is None:
+            self._restart_requested_at = None
+            self.restart_button.setVisible(False)
+            self._set_collection_text(
                 "Collecting. Resumed under the supervisor." if just_toggled
-                else "Collecting every 30 seconds."
+                else f"Collecting every {cadence} seconds."
+            )
+            return
+
+        self.restart_button.setVisible(True)
+        self.restart_button.setEnabled(not waiting)
+        if waiting:
+            self._set_collection_text(
+                "Restarting collection — waiting for the first new sample, "
+                "which should arrive within about a minute."
+            )
+        elif self._restart_requested_at is not None:
+            self._set_collection_text(
+                f"Collection is still stopped after a restart: the newest sample "
+                f"is {describe_age(stalled)} old. The reason is usually in "
+                f"{config.log_path()}.",
+                error=True,
+            )
+        else:
+            self._set_collection_text(
+                f"Collection has stopped: the newest sample is "
+                f"{describe_age(stalled)} old, but one should arrive every "
+                f"{cadence} seconds. Nothing new is being recorded.",
+                error=True,
             )
 
     @staticmethod
     def _repolish(widget):
         widget.style().unpolish(widget)
         widget.style().polish(widget)
+
+    def _refresh_stall_summary(self) -> bool:
+        """Replace the health sentence when collection has stopped.
+
+        Coverage and breaks describe history, and a store with 98% coverage
+        and a collector that died an hour ago would otherwise read as green --
+        which is the one state that most needs to be noticed.
+        """
+        stalled = self.stalled_for_s()
+        if stalled is None:
+            return False
+        now = time.time()
+        if self._restart_requested_at is not None and (
+                time.monotonic() - self._restart_requested_at < RESTART_GRACE_S):
+            style = "dataSummaryWarn"
+            text = ("\U0001F7E1 Restarting collection — this turns green once "
+                    "new samples arrive.")
+        else:
+            style = "dataSummaryError"
+            text = (
+                f"\U0001F534 Collection has stopped — nothing has been recorded "
+                f"since {_local_clock(self._last_sample_ts, now)} "
+                f"({describe_age(stalled)} ago). Press Restart collection below."
+            )
+        self.summary_label.setObjectName(style)
+        self.summary_label.setText(text)
+        self._repolish(self.summary_label)
+        return True
 
     def _refresh_summary(self, summary: dict | None):
         """One coloured sentence: the whole of simple mode's health check."""
@@ -280,6 +449,8 @@ class DataView(QWidget):
         coverage = summary.get("coverage_pct", 0.0)
         breaks = summary.get("sampling_gaps", 0)
 
+        if self._refresh_stall_summary():
+            return
         if coverage >= 90 and breaks <= 3:
             style = "dataSummaryGood"
             text = (
@@ -307,10 +478,13 @@ class DataView(QWidget):
         self._repolish(self.summary_label)
 
     def refresh(self):
-        self._refresh_collection_state()
         try:
             summary = store_summary()
         except Exception as exc:  # noqa: BLE001 - a locked or busy database must not stop the view
+            # Unknown is not stale: a busy database says nothing about whether
+            # the collector is alive, so no stopped warning on this path.
+            self._last_sample_ts = None
+            self._refresh_collection_state()
             # This runs on the UI thread every thirty seconds against a
             # database the collector is writing to. A failure here used to
             # print a traceback nobody could see and leave the numbers frozen
@@ -323,6 +497,9 @@ class DataView(QWidget):
                 self.labels[key].setText("—")
             self._refresh_summary(None)
             return
+
+        self._last_sample_ts = summary["last_ts"] if summary["exists"] else None
+        self._refresh_collection_state()
 
         if not summary["exists"]:
             self.labels["path"].setText(f"{config.db_path()} — not created yet")

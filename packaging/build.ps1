@@ -1,7 +1,24 @@
 # Build the RCA Desktop app and collector companion into distributable folders.
 # Run from the repository root: .\packaging\build.ps1
+#
+# Builds from the dedicated .venv-build environment, never the global Python:
+# PyInstaller bundles whatever that interpreter can import, and a global CUDA
+# torch once put 2.6 GB of NVIDIA DLLs into the release. make_venv.ps1 syncs
+# the venv to requirements-dev.lock (CPU-only torch) before every build; it is
+# a no-op when nothing changed.
+#
+#   -SkipSync   build with .venv-build as it is (offline rebuilds)
+
+param([switch]$SkipSync)
 
 $ErrorActionPreference = "Stop"
+
+$venvPython = (Join-Path (Get-Location) '.venv-build\Scripts\python.exe')
+if (-not $SkipSync) {
+    & (Join-Path $PSScriptRoot 'make_venv.ps1')
+} elseif (-not (Test-Path $venvPython)) {
+    throw ".venv-build does not exist. Run .\packaging\make_venv.ps1 first, or drop -SkipSync."
+}
 
 # A previously built app still running holds its own _internal DLLs open, and
 # Windows refuses to delete those, so the clean step failed with "Access is
@@ -38,7 +55,7 @@ foreach ($leftover in 'build', 'dist') {
 # $ErrorActionPreference does not apply to native executables in PowerShell 5.1,
 # so a failed PyInstaller run has to be caught by its exit code.
 Write-Host "Running PyInstaller..."
-pyinstaller packaging\rca_desktop.spec --noconfirm
+& $venvPython -m PyInstaller packaging\rca_desktop.spec --noconfirm
 if ($LASTEXITCODE -ne 0) { throw "Desktop build failed (exit $LASTEXITCODE)" }
 
 $collectorArgs = @(
@@ -64,8 +81,18 @@ $collectorArgs += Get-Content 'packaging\excludes.txt' |
     Where-Object { $_ -and -not $_.StartsWith('#') } |
     ForEach-Object { '--exclude-module', $_ }
 
-pyinstaller @collectorArgs
+& $venvPython -m PyInstaller @collectorArgs
 if ($LASTEXITCODE -ne 0) { throw "Collector build failed (exit $LASTEXITCODE)" }
+
+# The regression this venv exists to prevent. make_venv.ps1 already refuses a
+# CUDA torch, but catch it on the output too: a hook or a stray path could
+# still pull GPU runtimes in, and nobody notices until the zip is 2 GB.
+$cudaDlls = Get-ChildItem -Recurse -File dist\RCA-Desktop, dist\RCA-Collector -Include '*.dll' |
+    Where-Object { $_.Name -match '^(cublas|cudnn|cufft|curand|cusolver|cusparse|cudart|nccl|nvrtc|nvJitLink|torch_cuda|c10_cuda|caffe2_nvrtc)' }
+if ($cudaDlls) {
+    $cudaMb = ($cudaDlls | Measure-Object -Property Length -Sum).Sum / 1MB
+    throw ("Build contains {0:N0} MB of CUDA libraries ({1} ...). The app is CPU-only; rebuild with the CPU torch wheel." -f $cudaMb, $cudaDlls[0].Name)
+}
 
 # Cleaning dist removes the target of the Start menu shortcut, and Windows
 # deletes shortcuts whose target has gone as part of its own maintenance -- so

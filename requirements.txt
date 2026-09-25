@@ -1,20 +1,37 @@
+# Runtime dependencies of LocalRCA -- what the packaged app actually imports.
+#
+# Direct dependencies are pinned to the versions the test suite passes with.
+# The fully resolved, hash-checked set (transitive deps included) is
+# requirements.lock; the build venv and CI install from the locks, not from
+# this file. Test, lint and packaging tools are in requirements-dev.txt.
+#
+# After changing anything here, regenerate both locks:
+#     .\packaging\make_venv.ps1 -Relock
+#
+# PyTorch comes from its CPU-only index. The app runs its LSTM autoencoder on
+# the CPU and never touches CUDA; building against a CUDA wheel dragged about
+# 2.6 GB of NVIDIA DLLs into the PyInstaller bundle and took the release zip
+# from 272 MB to 1.99 GB. packaging/hooks/hook-torch.py is written for 2.12.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.0.0
-pandas>=2.0.0
-numpy>=1.24.0
-scikit-learn>=1.3.0
-statsmodels>=0.14.0
-networkx>=3.1
-matplotlib>=3.7.0
+torch==2.12.0+cpu
+# Imported lazily by torch.utils._pytree; declared as a hidden import in
+# packaging/rca_desktop.spec. See packaging/excludes.txt.
+optree==0.18.0
 
-# Desktop app (PySide6 conversion)
-PySide6>=6.7.0
-pytest-qt>=4.4.0
-pyinstaller>=6.10.0
+pandas==2.2.3
+numpy==2.2.6
+scipy==1.16.2
+scikit-learn==1.7.2
+statsmodels==0.14.6
+networkx==3.6.1
+matplotlib==3.10.7
 
-# Real telemetry collection (replaces synthetic data generation)
-psutil>=5.9.0
-pywin32>=306; sys_platform == "win32"
+# Desktop UI
+PySide6==6.11.1
+
+# Real telemetry collection
+psutil==6.0.0
+pywin32==311; sys_platform == "win32"
 # GPU utilisation, memory and temperature. Optional at runtime: a machine with
 # no NVIDIA GPU records NULL for those channels rather than failing.
-nvidia-ml-py>=12.0.0
+nvidia-ml-py==13.610.43

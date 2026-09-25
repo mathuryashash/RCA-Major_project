@@ -1,7 +1,7 @@
 # LocalRCA — Desktop UI Review
 
 Reviewed at v1.2.1 against `src/desktop/**`, `src/pipeline/visualizations.py`,
-`docs/UI_overview.md` and the three captures in `docs/screenshots/`.
+the three captures in `docs/screenshots/`.
 
 Contrast ratios below are computed from the literal hex values in
 `src/desktop/theme.py` and `src/pipeline/visualizations.py` using the WCAG 2.1

@@ -118,7 +118,7 @@ could not claim as causal, and said so.
 
 
 1. Open the repository's [Releases page](https://github.com/mathuryashash/RCA-Major_project/releases).
-2. Download `LocalRCA-v1.5.0-windows-x64.zip` (272 MB) and extract the entire ZIP to a folder you can write to, such as `C:\LocalRCA`, then double-click `Install LocalRCA.bat`.
+2. Download the latest `LocalRCA-v<version>-windows-x64.zip` (about 270 MB) and extract the entire ZIP to a folder you can write to, such as `C:\LocalRCA`, then double-click `Install LocalRCA.bat`.
 3. Run `RCA-Desktop\RCA-Desktop.exe`. On first launch it shows exactly what
    will be recorded and asks whether to begin. Nothing is collected until you
    agree.
@@ -155,9 +155,9 @@ away a trained model without being asked. To erase it too, run
 `delete-all-data` (below), then delete the extracted folder.
 
 Do **not** move either EXE out of its folder: the adjacent `_internal` directory
-contains required runtime files. Windows may show a SmartScreen prompt for an
-unsigned academic build; verify the release is published from this repository
-before choosing to run it.
+contains required runtime files. Windows may show a SmartScreen prompt: the build is
+signed with a self-signed certificate, which Windows does not trust. Verify the
+release is published from this repository before choosing to run it.
 
 To stop collection and erase all local data, run
 `.\RCA-Collector\RCA-Collector.exe delete-all-data` from the extracted folder.
@@ -306,8 +306,8 @@ Measured on the development machine (20 logical cores, RTX 4060 Laptop).
 | Model size | 129k parameters (0.52 MB) | measured |
 | Training | ~24 s | benchmark at 1,716 windows × 25 features |
 | Desktop app | 511 MB resident | measured over 4 min; plateaus, not a leak |
-| Packaged build | 1,109 MB installed | measured; torch dominates |
-| Release download | 433 MB (ZIP) | measured |
+| Packaged build | ~720 MB installed | measured, CPU-only PyTorch; torch dominates |
+| Release download | ~270 MB (ZIP) | measured |
 | Database growth | **3.33 MB/day**, bounded | measured over 18.2 days |
 
 **No GPU is used for training.** The model is 0.52 MB, and a 60-step LSTM at
@@ -361,8 +361,8 @@ Stated plainly, because you would be running this on your own machine.
 
 **Distribution**
 
-- **Unsigned.** Every user meets a SmartScreen warning on the download.
-  Mitigated only by the published SHA256 on the release.
+- **Self-signed.** Every user meets a SmartScreen warning on the download.
+  The signature and the published SHA256 prove integrity, not identity.
 - **No update mechanism.** A defect that ships stays until you fetch a newer
   release yourself.
 - **No crash reporting**, and irreconcilably so: `desktop.log` never leaves the
@@ -402,8 +402,8 @@ Stated plainly, because you would be running this on your own machine.
 ## Design documents
 
 - [Design spec](docs/superpowers/specs/2026-07-27-real-telemetry-rca-design.md) — architecture and the reasoning behind each decision
-- [Repository overview](docs/Repository_Overview.md)
-- [UI overview](docs/UI_overview.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Production readiness](docs/PRODUCTION_READINESS.md)
 
 <p align="center">
   <sub>Built with PyTorch, PySide6, and causal inference.</sub>

@@ -8,8 +8,8 @@
 | [WORKFLOW.md](WORKFLOW.md) | End to end, install to report, with measured timings |
 | [IMPLEMENTATION_PAPER.md](IMPLEMENTATION_PAPER.md) | The formal write-up, built from instrumented runs |
 | [INTERVIEW_PREP.md](INTERVIEW_PREP.md) | Questions to expect, with grounded answers |
-| [RESUME_MATERIAL.md](RESUME_MATERIAL.md) | CV bullets with the measurements behind them, and the claims to avoid |
-| [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md) | What stands between this and a product you would hand to a stranger, with verification checks |
+| [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) | Scored assessment against a production bar, with the ordered list of what to fix |
+| [UI_REVIEW.md](UI_REVIEW.md) | Contrast, layout and accessibility review of the desktop UI |
 
 Setup and usage live outside this folder: [INSTALL.md](../INSTALL.md) and the
 [README](../README.md).

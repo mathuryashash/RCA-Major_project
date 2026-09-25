@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "Also build the Windows bundle and upload it as an artifact"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint and test (Windows, Python 3.13)
+    # The app is Windows-only (pywin32, the event log, the Uninstall key), and
+    # the locks are resolved for x86_64-pc-windows-msvc.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # No display on the runner; Qt renders to an offscreen surface.
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: requirements-dev.lock
+
+      # Same lock, same CPU-only torch, same hash checks as packaging\make_venv.ps1.
+      - name: Install locked dependencies
+        run: |
+          uv venv .venv-build --python 3.13
+          uv pip sync --python .venv-build\Scripts\python.exe --index-strategy unsafe-best-match --require-hashes requirements-dev.lock
+
+      - name: Torch must be the CPU build
+        run: .venv-build\Scripts\python.exe -c "import torch, sys; print(torch.__version__); sys.exit(1 if torch.version.cuda else 0)"
+
+      - name: Locks match requirements*.txt
+        shell: pwsh
+        run: |
+          foreach ($pair in @(@('requirements.txt', 'requirements.lock'), @('requirements-dev.txt', 'requirements-dev.lock'))) {
+            uv pip compile --generate-hashes --emit-index-url --index-strategy unsafe-best-match `
+              --python-version 3.13 --python-platform x86_64-pc-windows-msvc --no-header --quiet `
+              $pair[0] -o "$env:RUNNER_TEMP\$($pair[1])"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # Only the pins matter; hash order and comments may differ.
+            $want = Select-String -Path "$env:RUNNER_TEMP\$($pair[1])" -Pattern '^\S+==\S+' | ForEach-Object { $_.Matches[0].Value }
+            $have = Select-String -Path $pair[1] -Pattern '^\S+==\S+' | ForEach-Object { $_.Matches[0].Value }
+            $diff = Compare-Object $have $want
+            if ($diff) {
+              $diff | Format-Table | Out-String | Write-Host
+              Write-Host "::warning file=$($pair[1])::$($pair[1]) is stale against $($pair[0]); run .\packaging\make_venv.ps1 -Relock"
+            }
+          }
+
+      - name: Ruff
+        run: .venv-build\Scripts\python.exe -m ruff check src tests
+
+      - name: Tests
+        run: .venv-build\Scripts\python.exe -m pytest tests -q -p no:cacheprovider
+
+  build:
+    name: Build Windows bundle
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.build
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: requirements-dev.lock
+
+      # build.ps1 creates .venv-build from requirements-dev.lock, refuses a CUDA
+      # torch, and fails if any CUDA DLL reaches dist\.
+      - name: Build
+        shell: powershell
+        run: .\packaging\build.ps1
+
+      - name: Package
+        shell: powershell
+        run: .\packaging\make_release.ps1
+
+      - name: Report sizes
+        shell: powershell
+        run: |
+          $dist = (Get-ChildItem -Recurse -File dist\RCA-Desktop, dist\RCA-Collector | Measure-Object Length -Sum).Sum / 1MB
+          $zip = Get-Item dist\LocalRCA-*.zip
+          "dist: {0:N0} MB; zip: {1} {2:N0} MB" -f $dist, $zip.Name, ($zip.Length / 1MB) | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localrca-windows-x64
+          path: |
+            dist/LocalRCA-*.zip
+            dist/LocalRCA-*.zip.sha256
+          retention-days: 14
+          compression-level: 0

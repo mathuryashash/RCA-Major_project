@@ -1,0 +1,16 @@
+# Everything needed to test, lint and package LocalRCA, on top of the runtime.
+# Resolved into requirements-dev.lock, which the build venv and CI install.
+# Regenerate with:  .\packaging\make_venv.ps1 -Relock
+-r requirements.txt
+
+# Tests
+pytest==8.3.4
+pytest-qt==4.5.0
+
+# Lint
+ruff==0.15.6
+
+# Packaging. packaging/hooks/hook-torch.py overrides the contrib torch hook,
+# so bump these together with torch and rebuild once to confirm.
+pyinstaller==6.20.0
+pyinstaller-hooks-contrib==2026.5

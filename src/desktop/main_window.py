@@ -1,9 +1,11 @@
 """Main window — tab shell wiring Stage 1 and Stage 2 views together."""
 
-from PySide6.QtCore import QSettings
+from pathlib import Path
+
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QScrollArea, QSizePolicy, QTabWidget, QLabel, QHBoxLayout,
-    QVBoxLayout, QWidget, QCheckBox,
+    QVBoxLayout, QWidget, QCheckBox, QFileDialog, QMessageBox, QPushButton,
 )
 
 from desktop.branding import app_icon
@@ -120,6 +122,21 @@ class MainWindow(QMainWindow):
             self._settings.value("advanced_mode", False, type=bool)
         )
         self.advanced_toggle.toggled.connect(self._on_advanced_toggled)
+        # In the header rather than on a tab: a user filing a bug report may
+        # be on any tab, and the one that is broken may not render at all.
+        # The app never sends anything itself, so this is the support path --
+        # a local zip the user reads and attaches by hand.
+        self.diagnostics_button = QPushButton("Export diagnostics…")
+        self.diagnostics_button.setObjectName("diagnosticsButton")
+        self.diagnostics_button.setToolTip(
+            "Save a zip of logs, app/Windows version and collection health "
+            "to attach to a bug report. Contains no collected telemetry, no "
+            "database and no model; your username is redacted. Nothing is "
+            "sent anywhere."
+        )
+        self.diagnostics_button.clicked.connect(self.export_diagnostics)
+        header.addWidget(self.diagnostics_button)
+        header.addSpacing(8)
         header.addWidget(self.advanced_toggle)
         layout.addLayout(header)
 
@@ -158,6 +175,42 @@ class MainWindow(QMainWindow):
         # Apply the persisted mode once every view exists, then let the
         # toggle drive it live from here on.
         self._apply_advanced_mode(self.advanced_toggle.isChecked())
+
+    def export_diagnostics(self) -> Path | None:
+        """Ask where to save the diagnostics zip, write it, report the result."""
+        from telemetry import diagnostics
+
+        desktop = Path.home() / "Desktop"
+        start = (desktop if desktop.is_dir() else Path.home()) / diagnostics.default_filename()
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, "Export diagnostics", str(start), "Zip archive (*.zip)")
+        if not chosen:
+            return None                         # cancelled
+        if not chosen.lower().endswith(".zip"):
+            chosen += ".zip"
+
+        # Summarising a large store reads every sample timestamp, which takes
+        # a noticeable moment; a busy cursor says the click registered.
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            path = diagnostics.export(chosen)
+        except Exception as error:  # noqa: BLE001 - shown to the user, not swallowed
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(
+                self, "Export diagnostics",
+                f"Could not write the diagnostics file:\n{error}")
+            return None
+        QApplication.restoreOverrideCursor()
+
+        self.statusBar().showMessage(f"Diagnostics saved to {path}", 5000)
+        QMessageBox.information(
+            self, "Export diagnostics",
+            f"Saved to:\n{path}\n\n"
+            "Includes logs, app and Windows version, and collection health "
+            "counts, with your username redacted. It does not include any "
+            "collected telemetry, the database or the trained model. Nothing "
+            "has been sent — attach the file to a bug report if you choose.")
+        return path
 
     def _on_advanced_toggled(self, checked: bool):
         self._settings.setValue("advanced_mode", checked)

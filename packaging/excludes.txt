@@ -18,6 +18,12 @@
 # "No module named 'optree'" partway through training. Regeneration will want
 # to add it back, because torch imports it lazily and no static closure sees
 # it.
+#
+# Do not add names setuptools vendors (importlib_metadata, more_itertools,
+# platformdirs, wheel, ...). In a clean build venv those exist only as
+# setuptools._vendor.*, and PyInstaller's setuptools hook aliases them to
+# their top-level names -- which fails the build with 'Target module ... already
+# imported as ExcludedModule' when the name is excluded here.
 Crypto
 InquirerPy
 PyInstaller
@@ -238,7 +244,6 @@ identify
 imageio
 imageio_ffmpeg
 imagesize
-importlib_metadata
 importlib_resources
 iniconfig
 instructor
@@ -329,7 +334,6 @@ ml_dtypes
 mlflow
 modelscope
 momentchi2
-more_itertools
 mouseinfo
 moviepy
 mpire
@@ -389,7 +393,6 @@ pgmpy
 phonemizer
 pip
 piper
-platformdirs
 playwright
 pluggy
 plyer
@@ -621,7 +624,6 @@ weasyprint
 webencodings
 websocket
 werkzeug
-wheel
 whichllm
 win10toast
 winremote

@@ -10,7 +10,7 @@ Implements:
   4. Root Cause Ranker           - composite scoring (causal outflow, temporal priority,
                                     anomaly severity, event correlation + PageRank).
 
-Follows the architecture described in PRD.md §1.1.3 and §1.1.4.
+Architecture: docs/ARCHITECTURE.md; rationale: docs/MODEL_RATIONALE.md.
 """
 
 import logging

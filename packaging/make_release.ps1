@@ -45,7 +45,7 @@ LocalRCA v$version
 Start here:  double-click  "Install LocalRCA.bat"
              (or read INSTALL.md, or run RCA-Desktop\RCA-Desktop.exe directly)
 
-Disk space:  about 1.1 GB extracted, plus roughly 3.3 MB per day of
+Disk space:  about 720 MB extracted, plus roughly 3.3 MB per day of
              collected telemetry, which is capped by retention.
 
 The FIRST launch takes about a minute -- Windows scans several thousand
@@ -55,7 +55,7 @@ Nothing is wrong; give it a minute.
 Keep each .exe inside its own folder -- the adjacent _internal directory
 holds its runtime. Move the whole folder if you need to relocate it.
 
-This build is unsigned, so Windows may show a SmartScreen prompt. Verify the
+This build is self-signed, so Windows may show a SmartScreen prompt. Verify the
 release came from
 https://github.com/mathuryashash/RCA-Major_project/releases
 before choosing Run anyway.

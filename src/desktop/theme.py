@@ -333,6 +333,18 @@ QLabel#dataSummaryNeutral {{
     padding: 10px 12px;
     border-radius: 8px;
 }}
+/* Red is reserved for failures, and a collector that has stopped recording
+   is one: amber would put it level with "only 80% coverage", which is a note
+   about history rather than something that needs doing now. */
+QLabel#dataSummaryError {{
+    color: {TEXT};
+    background: rgba(248, 113, 113, 0.12);
+    border-left: 4px solid {DANGER};
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 12px;
+    border-radius: 8px;
+}}
 
 /* The one switch between "what's wrong with my PC" and "show me everything
    you're measuring". Deliberately understated -- a loud toggle would compete

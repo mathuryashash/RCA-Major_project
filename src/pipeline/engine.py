@@ -2,7 +2,7 @@
 Shared RCA pipeline engine — GUI-agnostic.
 
 Every phase function here is a pure move from the original
-src/train_and_run.py CLI script. Both the CLI entry point and the
+tools/train_and_run.py CLI script. Both the CLI entry point and the
 PySide6 desktop app import from this module so there is exactly one
 implementation of each pipeline phase.
 """

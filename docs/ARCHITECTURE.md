@@ -95,7 +95,7 @@ src/
 ### The one rule that keeps this honest
 
 **`pipeline/engine.py` is the only place a pipeline phase is implemented.**
-Both the desktop app and `train_and_run.py` call into it. Nothing in
+Both the desktop app and `tools/train_and_run.py` call into it. Nothing in
 `desktop/` computes anything analytical; nothing in `telemetry/` imports
 torch.
 

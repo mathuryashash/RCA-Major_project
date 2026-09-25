@@ -57,7 +57,7 @@ updated from real output.
 - `docs/IMPLEMENTATION_PAPER.md` — the long-form version, ~1,800 lines. Every
   measurement, every defect, and the reasoning behind each design decision.
   The LaTeX paper is a condensation of it for a conference page limit.
-- `docs/PRODUCTION_CHECKLIST.md` — what still stands between the project and
+- `docs/PRODUCTION_READINESS.md` — what still stands between the project and
   something shippable to strangers.
 
 Where the two disagree, the markdown is authoritative: it is updated as

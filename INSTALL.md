@@ -27,12 +27,14 @@ to the filesystem rather than left inside the database file.
 
 ## About the SmartScreen warning
 
-**This build is not code-signed, and Windows will say so.** You will see
-*"Windows protected your PC"* with an *Unknown publisher*.
+**The executables are signed, but with a self-signed certificate, so Windows
+will still warn.** You will see *"Windows protected your PC"* with an
+*Unknown publisher*.
 
-That warning is Windows telling you the truth: nobody has paid a certificate
-authority to vouch for this binary. A code-signing certificate costs a few
-hundred dollars a year, and this project does not have one.
+The signature proves the files have not changed since they were built. It
+does not prove who built them: that needs a certificate authority Windows
+trusts to vouch for the publisher, which costs money this project does not
+spend. So the warning is Windows telling you the truth.
 
 If you choose to proceed, verify what you downloaded first — that is what the
 checksum in step 1 is for. It confirms the file is byte-for-byte what was

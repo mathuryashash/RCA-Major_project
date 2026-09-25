@@ -18,7 +18,7 @@ set "APP=%HERE%RCA-Desktop\RCA-Desktop.exe"
 
 rem --- Running from inside the ZIP? Windows extracts to a temp folder to let
 rem     you preview it, and everything appears to work until the app looks for
-rem     the 1.1 GB of runtime that was never unpacked.
+rem     the ~720 MB of runtime that was never unpacked.
 echo %HERE% | findstr /I "\\Temp\\ \\AppData\\Local\\Temp \\Temporary Internet" >nul
 if %errorlevel%==0 (
     echo   [X] This is running from a temporary folder, which usually means
@@ -41,7 +41,7 @@ if not exist "%APP%" (
     exit /b 1
 )
 
-rem --- Disk space. The extracted application is ~1.1 GB and the database grows
+rem --- Disk space. The extracted application is ~720 MB and the database grows
 rem     by roughly 3.3 MB a day; running out later is a worse failure than
 rem     refusing now.
 for /f "tokens=3" %%a in ('dir /-c "%HERE%" ^| findstr /C:"bytes free"') do set FREE=%%a
@@ -65,7 +65,7 @@ echo.
 echo   The FIRST launch takes about a minute while Windows scans several
 echo   thousand freshly extracted files. Later launches take a few seconds.
 echo.
-echo   This build is not code-signed, so Windows may show a SmartScreen
+echo   This build is self-signed, so Windows may show a SmartScreen
 echo   warning. That is expected; see INSTALL.md for how to verify the
 echo   download before trusting it.
 echo.

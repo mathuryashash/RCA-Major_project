@@ -11,6 +11,8 @@ build/
 venv/
 .venv/
 env/
+# Dedicated build environment, created by packaging\make_venv.ps1
+.venv-build/
 
 # IDE
 .vscode/
