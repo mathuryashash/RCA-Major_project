@@ -51,6 +51,38 @@ def test_supervisor_only_watches_a_collector_in_its_own_session(tmp_path, monkey
     assert "$_.SessionId -eq $session" in script
 
 
+def test_supervisor_script_carries_a_utf8_bom(tmp_path, monkeypatch):
+    # Windows PowerShell 5.1 reads a BOM-less script as ANSI, so a profile
+    # path like C:\Users\José arrives mangled, Test-Path is always False, and
+    # the supervisor waits out its grace period without ever launching.
+    monkeypatch.setattr(config, "app_dir", lambda: tmp_path / "RCA")
+    script = schedule._write_supervisor(tmp_path / "José Díaz" / "RCA-Collector.exe")
+    assert script.read_bytes().startswith(b"\xef\xbb\xbf")
+
+
+@pytest.mark.skipif(sys.platform != "win32" or shutil.which("powershell") is None,
+                    reason="needs Windows PowerShell")
+def test_supervisor_finds_a_collector_under_a_non_ascii_path(tmp_path, monkeypatch):
+    collector = tmp_path / "José Díaz" / "RCA-Collector.exe"
+    collector.parent.mkdir()
+    collector.write_bytes(b"")
+    monkeypatch.setattr(config, "app_dir", lambda: tmp_path / "RCA")
+    script = schedule._write_supervisor(collector)
+    # Run only the path check from the generated script, in the same file
+    # encoding, so the test exercises what PowerShell actually parses.
+    probe = script.with_name("probe.ps1")
+    first_line = script.read_text(encoding="utf-8-sig").splitlines()[1]
+    assert first_line.startswith("$collector = ")
+    probe.write_bytes(script.read_bytes()[:3]
+                      + chr(10).join([first_line, "Write-Output (Test-Path $collector)", ""])
+                      .encode("utf-8"))
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(probe)],
+        capture_output=True, text=True, timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
+    assert out == "True"
+
+
 def _powershell():
     if sys.platform != "win32":
         return None

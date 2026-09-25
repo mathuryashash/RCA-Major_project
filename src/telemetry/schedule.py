@@ -361,7 +361,10 @@ $mutex.ReleaseMutex()
 """
     try:
         script.parent.mkdir(parents=True, exist_ok=True)
-        script.write_text(body, encoding="utf-8")
+        # utf-8-sig: Windows PowerShell 5.1 reads a BOM-less script as ANSI,
+        # so a non-ASCII profile path (C:\Users\José) arrived mangled, every
+        # Test-Path was False, and supervision never launched a collector.
+        script.write_text(body, encoding="utf-8-sig")
         return script
     except OSError:
         return None

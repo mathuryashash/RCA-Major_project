@@ -126,7 +126,11 @@ class Collector:
         thirty seconds forever: at that point something is wrong that
         retrying will not fix.
         """
-        config.stop_flag_path().unlink(missing_ok=True)
+        # The stop flag is only ever lifted by whoever lifts the pause --
+        # resume, restart, install. Clearing it here meant any collector start
+        # (the desktop app launches one on every open, the logon entry at
+        # every sign-in) silently undid a pause while the UI still said
+        # "Paused".
         consecutive_failures = 0
         while not config.stop_flag_path().exists():
             started = time.monotonic()

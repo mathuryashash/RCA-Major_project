@@ -136,6 +136,10 @@ def main(argv: list[str] | None = None) -> int:
         print("Consent not granted. Run 'python -m telemetry accept-consent' first.", file=sys.stderr)
         return 1
     if args.command == "install":
+        # Installing is an explicit request to collect, so it lifts any pause
+        # a previous uninstall or a Pause click left behind; the collector
+        # itself no longer does.
+        config.stop_flag_path().unlink(missing_ok=True)
         if not schedule.register():
             print("Could not write the startup entry.", file=sys.stderr)
             return 1

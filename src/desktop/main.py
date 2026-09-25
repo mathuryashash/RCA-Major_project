@@ -136,6 +136,15 @@ def _ensure_collector_running() -> None:
         if not ensure_consent():
             return
 
+        # A fresh registration (first run, or re-installing after an
+        # uninstall) is a request to collect, so it lifts a stop flag the
+        # uninstall left behind. An existing registration keeps the flag: that
+        # is a Pause the user asked for, and opening the app must not undo it.
+        fresh_install = not schedule.is_registered()
+        if fresh_install:
+            from telemetry import config
+            config.stop_flag_path().unlink(missing_ok=True)
+
         schedule.start_now()
 
         # Finish the install from here rather than sending the user to a
@@ -144,7 +153,7 @@ def _ensure_collector_running() -> None:
         # findable in the Start menu and removable from Add/Remove Programs is
         # what someone who ran an application expects. All three are idempotent
         # and all three are undone by `uninstall`.
-        if not schedule.is_registered():
+        if fresh_install:
             schedule.register()
             schedule.register_uninstall_entry()
             schedule.create_start_menu_shortcut()
