@@ -1,8 +1,9 @@
 """Main window — tab shell wiring Stage 1 and Stage 2 views together."""
 
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QScrollArea, QSizePolicy, QTabWidget, QLabel, QHBoxLayout,
-    QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget, QCheckBox,
 )
 
 from desktop.branding import app_icon
@@ -97,12 +98,35 @@ class MainWindow(QMainWindow):
         # The subtitle takes the slack itself, so there is no trailing spacer
         # competing with it for the same space.
         header.addWidget(subtitle, stretch=1)
+        # A single, global, persisted switch for the whole app. Every raw
+        # stat, ML hyperparameter and file path this app has (channel table,
+        # training sliders, Granger lag, DB path) is a real answer to "what
+        # exactly are you doing on my machine" -- but showing all of it by
+        # default to someone who just wants to know why their PC is slow
+        # buries the one sentence they came for under a spreadsheet. One
+        # switch, not three, because these all answer the same underlying
+        # question (am I a technical reviewer or not) and a per-tab toggle
+        # risks it being on in one tab and forgotten-off in another.
+        self._settings = QSettings("LocalRCA", "Desktop")
+        self.advanced_toggle = QCheckBox("Advanced")
+        self.advanced_toggle.setObjectName("advancedToggle")
+        self.advanced_toggle.setToolTip(
+            "Show raw collected channels, ML training parameters, Granger "
+            "causality settings and file paths. Off by default; the app "
+            "behaves identically either way — this only changes what is "
+            "shown, never what is collected or computed."
+        )
+        self.advanced_toggle.setChecked(
+            self._settings.value("advanced_mode", False, type=bool)
+        )
+        self.advanced_toggle.toggled.connect(self._on_advanced_toggled)
+        header.addWidget(self.advanced_toggle)
         layout.addLayout(header)
 
         self.tabs = QTabWidget()
         self.stage1 = Stage1View(self.state)
         self.stage2 = Stage2View(self.state)
-        self.data_view = DataView()
+        self.data_view = DataView(self.state)
         # Every tab scrolls. The window declares a 1024x640 minimum it could
         # not actually render: measured, Stage 2 asks for 1168px of height and
         # the Captured Data table for 1752px of width, so at the minimum size
@@ -130,6 +154,20 @@ class MainWindow(QMainWindow):
             self.state.model_trained = True
             self.stage2.set_enabled(True)
             self.statusBar().showMessage("Existing model loaded — Stage 2 ready", 5000)
+
+        # Apply the persisted mode once every view exists, then let the
+        # toggle drive it live from here on.
+        self._apply_advanced_mode(self.advanced_toggle.isChecked())
+
+    def _on_advanced_toggled(self, checked: bool):
+        self._settings.setValue("advanced_mode", checked)
+        self._apply_advanced_mode(checked)
+
+    def _apply_advanced_mode(self, checked: bool):
+        self.state.advanced_mode = checked
+        self.data_view.set_advanced(checked)
+        self.stage1.set_advanced(checked)
+        self.stage2.set_advanced(checked)
 
     def _on_model_trained(self):
         self.state.model_trained = True

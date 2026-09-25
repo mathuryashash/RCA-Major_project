@@ -300,6 +300,51 @@ QSlider {{
     border-radius: 6px;
 }}
 QSlider:focus {{ border-color: {ACCENT}; }}
+
+/* Simple mode's whole health/readiness story: one coloured sentence per
+   screen, reusing the same green/amber pairing verdictSupported/
+   verdictCorrelation already established for the RCA verdict, so a user who
+   has learned "teal border = good, amber border = pay attention" on Stage 2
+   sees the identical language here rather than a second colour system. */
+QLabel#dataSummaryGood, QLabel#readinessGood {{
+    color: {TEXT};
+    background: rgba(45, 212, 191, 0.10);
+    border-left: 4px solid {ACCENT};
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 12px;
+    border-radius: 8px;
+}}
+QLabel#dataSummaryWarn, QLabel#readinessNeutral {{
+    color: {TEXT};
+    background: rgba(245, 158, 11, 0.10);
+    border-left: 4px solid {WARNING};
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 12px;
+    border-radius: 8px;
+}}
+QLabel#dataSummaryNeutral {{
+    color: {TEXT_MUTED};
+    background: rgba(139, 148, 158, 0.10);
+    border-left: 4px solid {TEXT_MUTED};
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 12px;
+    border-radius: 8px;
+}}
+
+/* The one switch between "what's wrong with my PC" and "show me everything
+   you're measuring". Deliberately understated -- a loud toggle would compete
+   with the primary action button for attention on a screen most users never
+   touch. */
+QCheckBox#advancedToggle {{
+    color: {TEXT_MUTED};
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    padding: 4px 8px;
+}}
+QCheckBox#advancedToggle:checked {{ color: {ACCENT}; }}
 """
 
 

@@ -29,7 +29,7 @@ class Stage2View(QWidget):
         self._model_stale = False
         layout = QVBoxLayout(self)
         config = QGroupBox("Observed Incident Window")
-        form = QFormLayout()
+        self.config_form = form = QFormLayout()
 
         incident_row = QHBoxLayout()
         self.incident_combo = QComboBox()
@@ -42,6 +42,11 @@ class Stage2View(QWidget):
         incident_row.addWidget(self.refresh_button, stretch=1)
         form.addRow("Detected incident", incident_row)
 
+        # Simple mode's job here is to point at an incident, not to type
+        # timestamps or reason about Granger lag. The picker above stays
+        # visible either way; these three rows are advanced-only and are
+        # tracked by index the same way Stage1View tracks its status rows,
+        # since QFormLayout.addRow() has no return value in PySide6.
         self.start_edit = QDateTimeEdit(QDateTime.currentDateTime().addSecs(-24 * 3600))
         self.start_edit.setAccessibleName("Analysis window start")
         self.end_edit = QDateTimeEdit(QDateTime.currentDateTime())
@@ -63,6 +68,7 @@ class Stage2View(QWidget):
             "tested at all."
         )
         form.addRow("Granger Max Lag", self.lag_spin)
+        self.advanced_config_rows = [1, 2, 3]  # after "Detected incident" (row 0)
 
         self.estimate_label = QLabel("—")
         self.estimate_label.setWordWrap(True)
@@ -171,6 +177,25 @@ class Stage2View(QWidget):
         layout.addLayout(exports)
         self.set_enabled(False)
 
+    def set_advanced(self, enabled: bool):
+        """Hide the raw range/lag inputs and the Score/Outflow columns.
+
+        The incident picker, verdict sentence and Run button stay visible in
+        both modes -- picking "what happened" and reading "what's likely
+        wrong" is the whole simple-mode task. Score and Outflow are unitless
+        internal ranking numbers with no stated scale; Confidence is already
+        a plain word (High/Medium/Low-style), so it alone carries the ranking
+        story in simple mode. The default landing tab also follows the mode:
+        a technical reviewer wants the table first, everyone else wants the
+        plain-language Report.
+        """
+        for row in self.advanced_config_rows:
+            self.config_form.setRowVisible(row, enabled)
+        # Rank=0, Metric=1, Score=2, Confidence=3, Outflow=4, Downstream=5.
+        self.root_cause_table.setColumnHidden(2, not enabled)
+        self.root_cause_table.setColumnHidden(4, not enabled)
+        self.results_tabs.setCurrentIndex(3 if not enabled else 0)
+
     def set_enabled(self, enabled):
         # Only ever called with True after Stage 1 finishes training, so a
         # freshly trained model clears any latched staleness.
@@ -233,7 +258,7 @@ class Stage2View(QWidget):
         end = pd.Timestamp(self.end_edit.dateTime().toSecsSinceEpoch(), unit="s", tz="UTC")
         samples = max(int((end - start).total_seconds() // 30), 0)
         if samples <= 0:
-            self.estimate_label.setText("—")
+            self.estimate_label.setText("Pick an incident or a range above to see a time estimate.")
             return
 
         needed = self.lag_spin.value() * 3 + 2

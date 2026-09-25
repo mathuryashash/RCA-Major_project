@@ -9,6 +9,12 @@ import pandas as pd
 @dataclass
 class AppState:
     model_trained: bool = False
+    # Whether the technical/transparency panels (raw channel tables, ML
+    # hyperparameters, Granger lag, DB paths) are shown. Off by default so a
+    # first-time non-technical user sees a status sentence, not a spreadsheet;
+    # persisted across restarts in QSettings by MainWindow, not here, since
+    # this dataclass has no business knowing about Qt's settings store.
+    advanced_mode: bool = False
 
     normal_df: Optional[pd.DataFrame] = None
     feat_cols: List[str] = field(default_factory=list)

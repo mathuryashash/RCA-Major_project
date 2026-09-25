@@ -54,21 +54,34 @@ class Stage1View(QWidget):
         layout.addWidget(info)
 
         status_box = QGroupBox("Collection Status")
-        status_form = QFormLayout()
+        self.status_form = status_form = QFormLayout()
+        # Simple mode's whole answer: one readiness sentence, styled by
+        # state, replacing four raw counters that all describe the same
+        # underlying "do we have enough clean data" question five different
+        # ways (see refresh_status -- this label and remaining_label below
+        # are driven from the same readiness object so they cannot disagree).
+        self.readiness_label = QLabel("—")
+        self.readiness_label.setObjectName("readinessNeutral")
+        self.readiness_label.setWordWrap(True)
+        status_form.addRow(self.readiness_label)
         self.clean_days_label = QLabel("—")
         self.uninterrupted_label = QLabel("—")
         self.current_run_label = QLabel("—")
         self.remaining_label = QLabel("—")
         self.model_label = QLabel("—")
+        # QFormLayout.addRow() returns None in PySide6, so rows are tracked
+        # by index (assigned in this order) rather than by return value, and
+        # hidden later via setRowVisible().
         status_form.addRow("Clean samples collected", self.clean_days_label)
         status_form.addRow("Longest uninterrupted run", self.uninterrupted_label)
         status_form.addRow("Current unbroken run", self.current_run_label)
         status_form.addRow("Remaining until trainable", self.remaining_label)
+        self.advanced_status_rows = [1, 2, 3, 4]  # readiness_label occupies row 0
         status_form.addRow("Current model", self.model_label)
         status_box.setLayout(status_form)
         layout.addWidget(status_box)
 
-        params = QGroupBox("Training Parameters")
+        self.params = QGroupBox("Training Parameters")
         form = QFormLayout()
         self.epochs_spin = _slider_with_spinbox(
             1, 30, 5, form, "LSTM Training Epochs",
@@ -91,8 +104,8 @@ class Stage1View(QWidget):
         # re-evaluate the gate immediately rather than at the next 30s tick.
         self.window_size_spin.valueChanged.connect(self.refresh_status)
         self.epochs_spin.valueChanged.connect(self._refresh_estimate)
-        params.setLayout(form)
-        layout.addWidget(params)
+        self.params.setLayout(form)
+        layout.addWidget(self.params)
 
         self.train_button = QPushButton("Train from Clean Collected Telemetry")
         self.train_button.setObjectName("primaryAction")
@@ -116,11 +129,29 @@ class Stage1View(QWidget):
         layout.addWidget(self.log_console, stretch=1)
 
         self.refresh_status()
+        self.set_advanced(bool(state.advanced_mode))
         # ponytail: reads the samples table on the UI thread every 30s. Fine at
         # ~1M rows/year; move to a QThread if the read ever becomes visible.
         self._status_timer = QTimer(self)
         self._status_timer.timeout.connect(self.refresh_status)
         self._status_timer.start(30_000)
+
+    def set_advanced(self, enabled: bool):
+        """Hide the raw per-sample counters and ML hyperparameters.
+
+        The readiness sentence, model-freshness row, and the train button
+        itself stay visible in both modes -- an average user still needs to
+        know "can I train" and "did it work", they just don't need four
+        overlapping sample counts or a window-size slider to get there.
+        """
+        for row in self.advanced_status_rows:
+            self.status_form.setRowVisible(row, enabled)
+        self.params.setVisible(enabled)
+
+    @staticmethod
+    def _repolish(widget):
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
 
     def _refresh_estimate(self):
         """Quote the cost of the current settings.
@@ -167,11 +198,19 @@ class Stage1View(QWidget):
                     "background and needs roughly 21 hours of quiet history "
                     "before there is enough to learn from."
                 )
+                self.readiness_label.setObjectName("readinessNeutral")
+                self.readiness_label.setText(
+                    "\U0001F7E1 Not ready yet — LocalRCA needs about a day of "
+                    "quiet background use before it has enough to learn from."
+                )
             else:
                 self.remaining_label.setText(
                     "start the collector:  python -m telemetry install"
                 )
                 self.status_label.setText(f"No database yet ({exc})")
+                self.readiness_label.setObjectName("readinessNeutral")
+                self.readiness_label.setText("Collector not started yet.")
+            self._repolish(self.readiness_label)
             self.train_button.setEnabled(False)
             return
 
@@ -194,16 +233,32 @@ class Stage1View(QWidget):
 
         if readiness.ready:
             self.remaining_label.setText("ready to train")
+            self.readiness_label.setObjectName("readinessGood")
+            self.readiness_label.setText(
+                "\U0001F7E2 Ready to train — you have enough clean, uninterrupted "
+                "history to build a baseline."
+            )
         elif readiness.hours_remaining < 24:
             self.remaining_label.setText(
                 f"{share:.0f}% collected — about {readiness.hours_remaining:.1f} "
                 f"hours to go"
+            )
+            self.readiness_label.setObjectName("readinessNeutral")
+            self.readiness_label.setText(
+                f"\U0001F7E1 {share:.0f}% of the way there — about "
+                f"{readiness.hours_remaining:.1f} hours of normal use left."
             )
         else:
             self.remaining_label.setText(
                 f"{share:.0f}% collected — about {readiness.days_remaining:.1f} "
                 f"days to go"
             )
+            self.readiness_label.setObjectName("readinessNeutral")
+            self.readiness_label.setText(
+                f"\U0001F7E1 {share:.0f}% of the way there — about "
+                f"{readiness.days_remaining:.1f} days of normal use left."
+            )
+        self._repolish(self.readiness_label)
 
         self._total_windows = readiness.total_windows
         self._refresh_estimate()

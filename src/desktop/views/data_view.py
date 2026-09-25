@@ -50,10 +50,19 @@ def _human_bytes(value: float) -> str:
 
 
 class DataView(QWidget):
-    """A plain account of the collected store: volume, span, and channels."""
+    """A plain account of the collected store: volume, span, and channels.
 
-    def __init__(self, parent=None):
+    Two audiences read this screen. Someone who just wants to know their PC
+    is being watched over and nothing is leaving the device needs one
+    sentence and a colour. Someone auditing the tool -- a reviewer, a
+    technical user, the person who wrote it -- needs the full channel table,
+    the raw counts and the on-disk path. Advanced mode is how both get their
+    screen without either seeing the other's.
+    """
+
+    def __init__(self, state=None, parent=None):
         super().__init__(parent)
+        self.state = state
         layout = QVBoxLayout(self)
 
         intro = QLabel(
@@ -63,7 +72,22 @@ class DataView(QWidget):
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
-        store_box = QGroupBox("Collected Store")
+        # Simple mode's entire answer: one status line, coloured by whether
+        # collection is actually healthy. Scanning a QFormLayout for problems
+        # means reading every row at equal visual weight; this exists so
+        # "everything is fine" or "something needs attention" is legible at
+        # a glance, and it reuses the same coverage/gap numbers the raw store
+        # box below computes so the two cannot disagree with each other.
+        self.summary_card = QGroupBox("Status")
+        summary_layout = QVBoxLayout()
+        self.summary_label = QLabel("—")
+        self.summary_label.setObjectName("dataSummaryNeutral")
+        self.summary_label.setWordWrap(True)
+        summary_layout.addWidget(self.summary_label)
+        self.summary_card.setLayout(summary_layout)
+        layout.addWidget(self.summary_card)
+
+        self.store_box = QGroupBox("Collected Store")
         form = QFormLayout()
         self.labels = {}
         for key, caption in (
@@ -85,10 +109,10 @@ class DataView(QWidget):
             self.labels[key].setWordWrap(True)
             self.labels[key].setMinimumWidth(1)
             form.addRow(caption, self.labels[key])
-        store_box.setLayout(form)
-        layout.addWidget(store_box)
+        self.store_box.setLayout(form)
+        layout.addWidget(self.store_box)
 
-        channel_box = QGroupBox("Captured Channels")
+        self.channel_box = QGroupBox("Captured Channels")
         channel_layout = QVBoxLayout()
         self.table = QTableWidget()
         self.table.setColumnCount(5)
@@ -105,8 +129,8 @@ class DataView(QWidget):
         self.table.setMinimumHeight(220)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         channel_layout.addWidget(self.table)
-        channel_box.setLayout(channel_layout)
-        layout.addWidget(channel_box, stretch=1)
+        self.channel_box.setLayout(channel_layout)
+        layout.addWidget(self.channel_box, stretch=1)
 
         # An off switch. Recording which applications someone uses, every 30
         # seconds, with no way to stop short of uninstalling is not a defensible
@@ -132,10 +156,18 @@ class DataView(QWidget):
         controls.addWidget(self.collection_state, stretch=1)
         layout.addLayout(controls)
 
+        # Raw store box and full channel table are advanced-only; the status
+        # card and controls stay visible in both modes since they are what
+        # this screen does, not detail about how it does it.
+        self.set_advanced(bool(state.advanced_mode) if state else False)
         self.refresh()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
         self._timer.start(30_000)
+
+    def set_advanced(self, enabled: bool):
+        self.store_box.setVisible(enabled)
+        self.channel_box.setVisible(enabled)
 
     def _check_for_update(self):
         """Ask GitHub whether a newer release exists. Nothing else.
@@ -225,6 +257,55 @@ class DataView(QWidget):
                 else "Collecting every 30 seconds."
             )
 
+    @staticmethod
+    def _repolish(widget):
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+
+    def _refresh_summary(self, summary: dict | None):
+        """One coloured sentence: the whole of simple mode's health check."""
+        if summary is None or not summary.get("exists"):
+            self.summary_label.setObjectName("dataSummaryNeutral")
+            self.summary_label.setText(
+                "Not collecting yet — the collector starts on its own and "
+                "this fills in within about a day."
+            )
+            self._repolish(self.summary_label)
+            return
+
+        days = 0.0
+        if summary.get("first_ts") is not None:
+            hours = (summary["last_ts"] - summary["first_ts"]).total_seconds() / 3600
+            days = hours / 24
+        coverage = summary.get("coverage_pct", 0.0)
+        breaks = summary.get("sampling_gaps", 0)
+
+        if coverage >= 90 and breaks <= 3:
+            style = "dataSummaryGood"
+            text = (
+                f"\U0001F7E2 Healthy — LocalRCA has been watching this PC for "
+                f"{days:.0f} day{'s' if days != 1 else ''} with good coverage "
+                f"({coverage:.0f}%)."
+            )
+        elif coverage >= 50:
+            style = "dataSummaryWarn"
+            text = (
+                f"\U0001F7E1 Partial data — {days:.0f} day{'s' if days != 1 else ''} of "
+                f"history, but only {coverage:.0f}% coverage ({breaks} break"
+                f"{'s' if breaks != 1 else ''}). Results may be less complete."
+            )
+        else:
+            style = "dataSummaryWarn"
+            text = (
+                f"\U0001F7E1 Just getting started — {days:.0f} day"
+                f"{'s' if days != 1 else ''} of history so far "
+                f"({coverage:.0f}% coverage). Keep the app running to build "
+                f"up enough clean data to train on."
+            )
+        self.summary_label.setObjectName(style)
+        self.summary_label.setText(text)
+        self._repolish(self.summary_label)
+
     def refresh(self):
         self._refresh_collection_state()
         try:
@@ -240,6 +321,7 @@ class DataView(QWidget):
             for key in ("samples", "proc_samples", "events", "coverage",
                         "sampling_gaps", "gaps", "span", "size", "retention"):
                 self.labels[key].setText("—")
+            self._refresh_summary(None)
             return
 
         if not summary["exists"]:
@@ -248,6 +330,7 @@ class DataView(QWidget):
                         "sampling_gaps", "gaps", "span", "size", "retention"):
                 self.labels[key].setText("—")
             self.table.setRowCount(0)
+            self._refresh_summary(summary)
             return
 
         self.labels["samples"].setText(f"{summary['samples']:,}")
@@ -304,3 +387,5 @@ class DataView(QWidget):
                 self.table.setItem(row, col, QTableWidgetItem(text))
         self.table.resizeColumnsToContents()
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+
+        self._refresh_summary(summary)
