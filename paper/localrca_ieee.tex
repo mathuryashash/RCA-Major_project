@@ -93,7 +93,11 @@ injected cause. Across real history it produces a supported causal chain for
 $106$ of $596$ incidents ($17.8\%$), with $36\%$ falling below the Granger
 sample floor and therefore untestable at the default lag. We further show that
 the hand-written subsystem prior rejects $22.7\%$ of statistically accepted
-pairs and forbids mechanisms that demonstrably exist. We argue that the
+pairs and forbids mechanisms that demonstrably exist. Deploying the system to
+non-specialist users imposed two further requirements, which we describe with
+their limits: the learned model is encrypted at rest under the user's Windows
+credentials, and the interface leads with one plain-language verdict per
+screen while keeping every raw measurement one switch away. We argue that the
 most useful property of such a system is its willingness to report that it
 cannot explain an incident, and we quantify how often that occurs.
 \end{abstract}
@@ -147,6 +151,10 @@ Our contributions are:
         statistical gates---is the largest single filter in the pipeline, and
         that it forbids physically real mechanisms
         (Section~\ref{sec:topology}).
+  \item A deployment design for a tool that holds sensitive telemetry---
+        per-user encryption of the learned model, signed binaries, and an
+        interface that separates the verdict from the evidence---together with
+        the places it falls short (Section~\ref{sec:deploy}).
 \end{enumerate}
 
 %==============================================================================
@@ -232,6 +240,13 @@ and an allow-listed subset of Windows Event Log records. Retention is
 tiered by sensitivity: numeric readings for 365 days, per-process detail for
 30 days, and the foreground application name---the most personal field
 collected---for 30 days.
+
+At the time of writing the evaluation host had accumulated $124{,}674$ system
+samples, $1{,}835{,}250$ process samples and $6{,}600$ Event Log records over
+59 days, occupying 227\,MB. Coverage of that span is $73.1\%$: 157 breaks in
+collection account for 383 hours not recorded. The population survey
+(Section~\ref{sec:population}) draws on the most recent 30 days of this
+history.
 
 %==============================================================================
 \section{Method}
@@ -489,8 +504,9 @@ found'' instead of ``not tested''---rather than insight.
 Since no service call graph exists on an endpoint, the system encodes domain
 knowledge as an explicit map of permissible subsystem influence. Auditing it
 across all analysable incidents shows it is the largest single filter in the
-pipeline after the statistical gates: of $459$ accepted pairs, $337$ survive,
-$122$ ($22.7\%$) are rejected by the map and $79$ ($14.7\%$) by cycle-breaking.
+pipeline after the statistical gates: of $538$ accepted pairs, $337$
+($62.6\%$) survive, $122$ ($22.7\%$) are rejected by the map and $79$
+($14.7\%$) by cycle-breaking.
 
 \begin{figure}[t]
 \centering
@@ -547,6 +563,81 @@ would begin to compete. We record this as an open design question rather than
 patching it.
 
 %==============================================================================
+\section{Deployment Engineering}
+\label{sec:deploy}
+%==============================================================================
+
+A research prototype can leave its data in plaintext and its results as raw
+tables. A tool installed by someone else, holding a record of when and how
+their machine is used, cannot. This section describes what the released
+application (v1.5.1) does about both, and where it falls short.
+
+\subsection{Protecting the model at rest}
+
+The trained artefact holds the scaler's per-metric bounds and the per-metric
+thresholds---a compact statistical profile of how the machine is used. It is
+wrapped with the Windows Data Protection API (DPAPI), which binds the
+ciphertext to the user's logon credentials, so a copy taken to another account
+or machine cannot be read. The write is atomic, via a temporary file and a
+rename, so an interrupted save cannot leave a truncated model. Artefacts from
+earlier versions carry no header, still load, and are encrypted the next time
+the model is trained. If the user's credentials are reset and the key is lost,
+the application says the model must be retrained rather than surfacing a raw
+Windows error. The database and logs, which DPAPI does not wrap, are covered by
+a second, best-effort layer: at start-up the collector asks the Encrypting
+File System (EFS) to encrypt its data folder.
+
+Three findings qualify this. First, EFS does not exist on Windows Home
+editions. The evaluation host runs one, the request fails on every start, and
+its 227\,MB database remains in plaintext, protected only by file-system
+permissions. The failure is logged rather than silent, but the protection a
+user receives depends on which edition of Windows they bought. Second,
+re-encryption happens only on retraining, so the model on the evaluation
+host---trained before encryption was added---is still the plaintext artefact.
+Third, independent review of the encryption change found that training wrote
+an intermediate checkpoint in plaintext and deleted it only on success; an
+interrupted run left unencrypted weights on disk. The checkpoint is now
+removed in a \texttt{finally} block, and any leftover from an earlier crash is
+purged when training starts.
+
+\subsection{Signed binaries}
+
+Both executables are Authenticode-signed with an RFC 3161 timestamp, and each
+release publishes a SHA-256 checksum. The certificate is self-signed: it shows
+that a binary is unchanged since it was built, not who built it, so Windows
+SmartScreen still warns on first run. Removing the warning requires a
+certificate from an authority Windows trusts, which this project does not
+have.
+
+\subsection{Separating the verdict from the evidence}
+
+A review of the running application found that the first screen presented a
+table of every captured channel with its raw latest value, and that training
+readiness was expressed four different ways (clean samples, longest run,
+current run, time remaining) that a non-specialist had to reconcile alone.
+Hiding these would contradict the project's premise, since a user cannot
+consent meaningfully to collection they cannot inspect.
+
+The released interface therefore has two presentations of identical
+computation, selected by a single global switch that persists across sessions
+and is off by default. In the default view each tab leads with one sentence
+whose colour encodes state: the data tab reports \emph{Healthy} only when
+coverage is at least $90\%$ with at most three breaks, and \emph{Partial data}
+from $50\%$; the training tab states whether a model can be trained and, if
+not, how long remains. The inference tab keeps the incident picker and opens
+on the plain-language report rather than the score table. The advanced view
+restores the raw counts, the channel table, the database path, the training
+hyperparameters, the Granger lag, and the score and outflow columns. Nothing is
+computed differently in either view; the switch changes presentation only, and
+the headline sentence is derived from the same coverage figures the advanced
+view prints. The evaluation host itself reads \emph{Partial data} at $73\%$
+coverage---accurate, if unflattering.
+
+This design was checked by one expert review and by driving the live
+application. It has not been measured with users, and whether the default view
+helps a non-specialist reach a correct conclusion is unestablished.
+
+%==============================================================================
 \section{Discussion and Threats to Validity}
 %==============================================================================
 
@@ -570,12 +661,16 @@ suppress the resulting over-reporting, and Section~\ref{sec:topology} shows the
 prior itself is imperfect.
 
 \textbf{A methodological observation.} Nine defects were found in code carrying
-a passing test suite of 142 tests. In nearly every case the test asked a
+a passing test suite of 130 tests. In nearly every case the test asked a
 question \emph{adjacent} to the one that mattered---a database value instead of
 the bytes on disk, one file instead of the full storage footprint, a function
 instead of the code path calling it. Two fixes were worse than the defects they
 repaired. These were caught by adversarial review rather than additional
-testing, which we believe generalises beyond this system.
+testing, which we believe generalises beyond this system. The pattern recurred
+once encryption was added: two reviewers independently found the plaintext
+training checkpoint of Section~\ref{sec:deploy} in code whose tests all
+passed, because the tests exercised only the successful path. The suite now
+stands at 150 tests.
 
 %==============================================================================
 \section{Conclusion}
@@ -596,8 +691,11 @@ in this system, the engineering required to make it say so honestly exceeded
 the engineering required to compute an answer at all.
 
 Future work: repeating the evaluation on second hardware, testing a fault whose
-cause is not the loudest metric, and resolving whether the subsystem prior
-should admit the feedback directions it currently forbids.
+cause is not the loudest metric, resolving whether the subsystem prior should
+admit the feedback directions it currently forbids, encrypting the database
+independently of EFS so that Home-edition users receive the same protection,
+and measuring with users whether the default view leads them to correct
+conclusions.
 
 %==============================================================================
 \begin{thebibliography}{00}

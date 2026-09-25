@@ -16,6 +16,9 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.shared import Inches, Pt, RGBColor
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
 
 TEAM = [
     ("Yashash Mathur", "1RFXXISXXX"),
@@ -152,6 +155,15 @@ def add_caption(doc, text):
     run = p.add_run(text)
     run.italic = True
     run.font.size = Pt(10.5)
+
+
+def add_figure(doc, path, caption, width_in=6.0):
+    """Centered image plus caption; path is relative to the repository root."""
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_before = Pt(6)
+    p.add_run().add_picture(str(ROOT / path), width=Inches(width_in))
+    add_caption(doc, caption)
 
 
 def add_toc_field(doc):
@@ -314,7 +326,11 @@ def build():
         "in one case produced a correct causal explanation of a fault it was never "
         "told about. Across real history it produces a supported causal chain for "
         "106 of 596 incidents (17.8%), and the hand-written subsystem prior rejects "
-        "22.7% of statistically accepted pairs. The most useful property of such a "
+        "22.7% of statistically accepted pairs. Preparing the system for use by "
+        "non-specialists added two requirements: the learned model is encrypted "
+        "at rest under the user's Windows credentials, and the interface leads "
+        "with a single plain-language verdict per screen while keeping every raw "
+        "measurement one switch away. The most useful property of such a "
         "system is argued to be its willingness to report that it cannot explain an "
         "incident, and this rate is quantified across the full survey population.")
 
@@ -330,9 +346,10 @@ def build():
         "Fig 4.1  Inference pipeline: detection, causal testing, terminal states",
         "Fig 6.1  Causal yield against incident window length",
         "Fig 7.1  Subsystem topology prior and rejected causal directions",
-        "Fig 8.1  Captured Data tab (Stage 0)",
-        "Fig 8.2  Baseline & Training tab (Stage 1)",
-        "Fig 8.3  Run RCA Inference tab (Stage 2)",
+        "Fig 8.1  Captured Data tab, default view",
+        "Fig 8.2  Captured Data tab, advanced view",
+        "Fig 8.3  Baseline & Training tab, default view",
+        "Fig 8.4  Run RCA Inference tab, default view",
     ]
     for f in figs:
         add_body(doc, f, justify=False)
@@ -343,6 +360,7 @@ def build():
         "Table 6.1  Controlled fault injections and outcomes",
         "Table 6.2  Granger max-lag sweep: tested population vs. explanation rate",
         "Table 7.1  Topology prior: kept, pruned, and cycle-broken causal pairs",
+        "Table 8.1  What the default and advanced views show",
         "Table 9.1  Test suite and static-analysis verification summary",
     ]
     for t in tabs:
@@ -357,6 +375,8 @@ def build():
         ("ADF", "Augmented Dickey\u2013Fuller (unit-root test)"),
         ("WAL", "Write-Ahead Logging (SQLite journal mode)"),
         ("GUI", "Graphical User Interface"),
+        ("DPAPI", "Windows Data Protection API"),
+        ("EFS", "Encrypting File System (Windows)"),
         ("IEEE", "Institute of Electrical and Electronics Engineers"),
         ("CIE", "Continuous Internal Evaluation"),
         ("SEE", "Semester End Examination"),
@@ -420,6 +440,8 @@ def build():
         "evidence and quantify what it forbids.",
         "Deliver a working Windows desktop application (not only a research script) "
         "with a background collector service, a training UI, and an inference UI.",
+        "Make that application usable by a non-specialist without hiding what it "
+        "collects, and protect the learned model at rest.",
     ])
 
     add_section(doc, "1.5  Scope")
@@ -517,6 +539,12 @@ def build():
         "single most personal field collected \u2014 for only 30 days, with "
         "SQLite's secure_delete option enabled so that purged rows do not survive "
         "in unallocated database pages.")
+    add_body(doc,
+        "At the time of writing the evaluation host had accumulated 124,674 system "
+        "samples, 1,835,250 process samples and 6,600 Event Log records over 59 "
+        "days, occupying 227 MB. Coverage of that span is 73.1%: 157 breaks in "
+        "collection account for 383 hours not recorded. The population survey in "
+        "Chapter 6 draws on the most recent 30 days of this history.")
 
     add_section(doc, "3.2  Technology Stack")
     add_table(doc, ["Layer", "Technology", "Purpose"], [
@@ -525,7 +553,8 @@ def build():
         ["Persistence", "SQLite (WAL mode)", "Single-file local database, no server process"],
         ["Anomaly model", "PyTorch (LSTM autoencoder)", "Learns per-machine \u201cnormal\u201d behaviour"],
         ["Causal inference", "statsmodels (Granger causality, ADF test)", "Constrained causal graph construction"],
-        ["Packaging", "PyInstaller", "Single-file Windows executables"],
+        ["Protection at rest", "DPAPI (pywin32), EFS", "Per-user encryption of the model; best-effort folder encryption"],
+        ["Packaging", "PyInstaller, signtool", "Signed Windows executables"],
     ], widths_in=[1.6, 2.4, 2.5])
     add_caption(doc, "Table 3.1  Technology stack by architectural layer.")
 
@@ -538,7 +567,8 @@ def build():
         "is persisted separately as a single PyTorch artifact (telemetry_model.pt) "
         "containing the network weights, per-metric thresholds, the feature scaler, "
         "and metadata such as training timestamp and reference reconstruction "
-        "error, used later to detect when the model has gone stale.")
+        "error, used later to detect when the model has gone stale. Since v1.5.1 "
+        "this artifact is written encrypted (Section 5.5).")
 
     # ==========================================================
     # CHAPTER 4 - METHODOLOGY
@@ -664,7 +694,9 @@ def build():
         "an incident window and run the causal pipeline). Training and inference "
         "each run on a background QThread worker so the UI remains responsive; "
         "progress and log output are streamed back to the main thread via Qt "
-        "signals.")
+        "signals. A single Advanced switch in the window header, persisted with "
+        "QSettings, chooses between a plain-language default view and the full "
+        "technical view (Chapter 8).")
 
     add_section(doc, "5.4  Fault-Injection Harness")
     add_body(doc,
@@ -676,6 +708,41 @@ def build():
         "and scores the result against the known injected cause. This is the "
         "project's principal answer to the \u201cno ground truth\u201d constraint from "
         "Section 1.3.")
+
+    add_section(doc, "5.5  Protection at Rest and Signed Binaries")
+    add_body(doc,
+        "The trained model holds the scaler's per-metric bounds and thresholds, "
+        "which together form a compact statistical profile of how the machine is "
+        "used. It is wrapped with the Windows Data Protection API (DPAPI), which "
+        "binds the ciphertext to the user's logon credentials, so a copy taken to "
+        "another account or machine cannot be read. The write is atomic, via a "
+        "temporary file and a rename, so an interrupted save cannot leave a "
+        "truncated model. Artifacts from earlier versions carry no header, still "
+        "load, and are encrypted the next time the model is trained. If the "
+        "user's credentials are reset and the key is lost, the application says "
+        "the model must be retrained rather than surfacing a raw Windows error.")
+    add_body(doc,
+        "The database and logs, which DPAPI does not wrap, are covered by a second, "
+        "best-effort layer: at start-up the collector asks the Encrypting File "
+        "System (EFS) to encrypt its data folder. EFS does not exist on Windows "
+        "Home editions. The evaluation host runs Windows 11 Home, the request "
+        "fails on every start, and its 227 MB database remains in plaintext, "
+        "protected only by file-system permissions. The failure is logged rather "
+        "than silent, but the protection a user receives depends on their edition "
+        "of Windows. Likewise, the model on the evaluation host was trained before "
+        "encryption was added and stays plaintext until it is retrained.")
+    add_body(doc,
+        "Independent review of the encryption change found that training wrote an "
+        "intermediate checkpoint in plaintext and deleted it only on success, so "
+        "an interrupted run left unencrypted weights on disk. The checkpoint is "
+        "now removed in a finally block, and any leftover from an earlier crash is "
+        "purged when training starts.")
+    add_body(doc,
+        "Both executables are Authenticode-signed with an RFC 3161 timestamp, and "
+        "each release publishes a SHA-256 checksum. The certificate is "
+        "self-signed: it shows that a binary is unchanged since it was built, not "
+        "who built it, so Windows SmartScreen still warns on first run. Removing "
+        "the warning requires a certificate from an authority Windows trusts.")
 
     # ==========================================================
     # CHAPTER 6 - RESULTS AND DISCUSSION (fault injection + population)
@@ -817,37 +884,74 @@ def build():
     # ==========================================================
     add_chapter_title(doc, 8, "Application Walkthrough")
 
+    add_body(doc,
+        "A review of the running application found that its first screen was a "
+        "table of every captured channel with its raw latest value, and that "
+        "training readiness was expressed four different ways (clean samples, "
+        "longest run, current run, time remaining) that a non-specialist had to "
+        "reconcile alone. Hiding this information would contradict the project's "
+        "premise, since a user cannot meaningfully consent to collection they "
+        "cannot inspect. The released application (v1.5.1) therefore offers two "
+        "presentations of the same computation, selected by one Advanced switch in "
+        "the window header. The switch is off by default and remembered between "
+        "sessions. Nothing is computed differently in either view.")
+
     add_section(doc, "8.1  Captured Data Tab")
     add_body(doc,
-        "The Captured Data tab shows raw collection health: total clean samples "
-        "collected, the longest uninterrupted collection run, the current unbroken "
-        "run, and how much history remains until the machine is trainable. This is "
-        "deliberately the first screen a user sees, since the system is unusable "
-        "for the first ~21 hours of a fresh install and must communicate that "
-        "honestly rather than presenting a blank or broken-looking screen.")
+        "The default view shows one sentence whose colour encodes the state of "
+        "collection. It reads Healthy only when coverage is at least 90% with at "
+        "most three breaks, and Partial data from 50%; below that it says "
+        "collection is just getting started. The evaluation host reads Partial "
+        "data at 73% coverage, which is accurate if unflattering (Fig. 8.1). Pause, "
+        "refresh and update-check controls are visible in both views.")
+    add_figure(doc, "report/assets/fig8_1_data_simple.png",
+               "Fig 8.1  Captured Data tab, default view.")
+    add_body(doc,
+        "With Advanced on, the same tab adds the raw store statistics \u2014 sample "
+        "counts, coverage, breaks, retention periods, size on disk and database "
+        "path \u2014 and the full table of captured channels with their latest values "
+        "and whether the model uses each one (Fig. 8.2).")
+    add_figure(doc, "report/assets/fig8_2_data_advanced.png",
+               "Fig 8.2  Captured Data tab, advanced view.")
 
     add_section(doc, "8.2  Baseline & Training Tab")
     add_body(doc,
-        "Once enough clean history exists, this tab exposes two training "
-        "parameters \u2014 LSTM training epochs and LSTM window size \u2014 as paired "
-        "slider/spin-box controls with plain-language tooltips (added during this "
-        "project's UX verification pass, Chapter 9) explaining what each setting "
-        "trades off. An estimated training time is shown before the user commits, "
-        "calibrated from the last real run on the machine where available. Training "
-        "runs on a background thread; progress and log output populate a log "
-        "console (kept hidden until training first produces output, so the initial "
-        "screen is not dominated by an empty black box).")
+        "The default view states whether a model can be trained and, if not, "
+        "roughly how long remains, followed by the age of the current model and "
+        "the Train button (Fig. 8.3). The advanced view restores the four "
+        "readiness counters and the training hyperparameters \u2014 LSTM epochs and "
+        "window size \u2014 with an estimate of training time calibrated from the "
+        "last run on the machine. Training runs on a background thread, and its "
+        "log console appears only once training produces output.")
+    add_figure(doc, "report/assets/fig8_3_training_simple.png",
+               "Fig 8.3  Baseline & Training tab, default view.")
 
     add_section(doc, "8.3  Run RCA Inference Tab")
     add_body(doc,
-        "The inference tab lets the user either select an automatically detected "
-        "incident from a dropdown or specify a custom time range, set the Granger "
-        "maximum lag (with a tooltip explaining the sensitivity/data-requirement "
-        "trade-off), and run the pipeline. Results are presented across four "
-        "sub-tabs: Root Causes (ranked candidate table), Causal Graph (the directed "
-        "graph of surviving edges), Anomaly Timeline, and a plain-text Report. An "
-        "empty-state placeholder row, styled consistently with the other result "
-        "tabs, is shown before any analysis has been run.")
+        "The default view keeps the incident picker, the time estimate and the Run "
+        "button, and opens results on the plain-language Report tab (Fig. 8.4). "
+        "The advanced view adds the custom start and end times, the Granger "
+        "maximum lag, and the Score and Outflow columns of the ranked candidate "
+        "table, and opens results on that table. The Causal Graph and Anomaly "
+        "Timeline tabs are available in both views.")
+    add_figure(doc, "report/assets/fig8_4_inference_simple.png",
+               "Fig 8.4  Run RCA Inference tab, default view.")
+
+    add_table(doc, ["Tab", "Default view", "Advanced view adds"], [
+        ["Captured Data", "One coloured status sentence; pause/refresh",
+         "Store statistics, retention, database path, channel table"],
+        ["Baseline & Training", "Readiness sentence; model age; Train",
+         "Four readiness counters; epochs, window size, time estimate"],
+        ["Run RCA Inference", "Incident picker; Run; Report tab first",
+         "Custom range, Granger max lag, Score/Outflow columns"],
+    ], widths_in=[1.5, 2.3, 2.6])
+    add_caption(doc, "Table 8.1  What the default and advanced views show.")
+
+    add_body(doc,
+        "This design was checked by one expert review and by driving the live "
+        "application; it has not been measured with users. Whether the default "
+        "view helps a non-specialist reach a correct conclusion is therefore "
+        "unestablished, and is listed as future work.")
 
     # ==========================================================
     # CHAPTER 9 - TESTING AND VERIFICATION
@@ -858,7 +962,7 @@ def build():
     add_body(doc,
         "The project carries an automated pytest suite covering the collector, "
         "persistence layer, causal engine, and desktop UI logic. At the time of "
-        "this report the suite comprises 142 tests, all passing, with static "
+        "this report the suite comprises 150 tests, all passing, with static "
         "analysis (ruff) reporting zero outstanding issues across the source and "
         "test trees. A methodological finding from this project's own verification "
         "process is worth recording explicitly: nine real defects were found in "
@@ -897,14 +1001,27 @@ def build():
         "Every fix identified by this review process was implemented directly "
         "(not merely reported) and re-verified against the full test suite, which "
         "remained at 142/142 passing after all changes.")
+    add_body(doc,
+        "A second round of security and database review examined the encryption "
+        "and signing changes. It found one real defect \u2014 the plaintext training "
+        "checkpoint described in Section 5.5, found independently by both "
+        "reviewers in code whose tests all passed because they exercised only the "
+        "successful path \u2014 and four lesser issues: a silent fallback to "
+        "plaintext when DPAPI is unavailable (now logged), a raw Windows error on "
+        "decryption failure (now a clear message), an undocumented choice of "
+        "timestamp server, and a confusing prompt when the signing script is "
+        "re-run. All five were fixed, and the suite grew to 150 tests.")
 
     add_section(doc, "9.3  Verification Summary")
     add_table(doc, ["Check", "Result"], [
-        ["Automated tests (pytest)", "142 / 142 passing"],
+        ["Automated tests (pytest)", "150 / 150 passing"],
         ["Static analysis (ruff)", "0 issues"],
         ["Security review", "No exploitable defects; 3 documented low-severity limitations"],
         ["Database review", "2 race conditions found and fixed; 1 performance fix applied"],
         ["UX/UI review", "3 usability findings, all fixed and re-verified"],
+        ["Encryption/signing review", "1 defect and 4 minor issues, all fixed"],
+        ["Design review of live UI", "Default/advanced split implemented and checked in the running app"],
+        ["Release build", "v1.5.1, signed, SHA-256 published"],
         ["Real-data L-sweep (Ch. 6)", "596-incident population, 3 lag settings, ~44 min real compute"],
         ["Topology audit (Ch. 7)", "538 causal-pair evaluations classified and reported"],
     ], widths_in=[2.6, 3.1])
@@ -931,6 +1048,11 @@ def build():
         "ranking that changes with the chosen analysis window, and in this system "
         "the engineering required to make it say so honestly exceeded the "
         "engineering required to compute an answer at all.")
+    add_body(doc,
+        "The released application also protects the learned model under the "
+        "user's Windows credentials, ships signed binaries, and leads with a plain "
+        "verdict while keeping every measurement available to anyone who asks for "
+        "it.")
 
     add_section(doc, "10.2  Limitations")
     add_bullets(doc, [
@@ -952,6 +1074,10 @@ def build():
         "intervention. The false-discovery-rate correction, effect floor and "
         "subsystem prior exist to suppress the resulting over-reporting, and "
         "Chapter 7 shows the prior itself is measurably imperfect.",
+        "Protection at rest is uneven. The database relies on EFS, which Windows "
+        "Home editions lack, and the binaries are self-signed, so SmartScreen "
+        "still warns every new user.",
+        "The default view has not been evaluated with users.",
     ])
 
     add_section(doc, "10.3  Future Work")
@@ -969,6 +1095,10 @@ def build():
         "project's adversarial review found (storage footprint, cross-process "
         "behaviour, and code paths rather than functions in isolation), since "
         "these were systematically under-tested relative to unit-level logic.",
+        "Encrypt the database itself (for example with SQLCipher) so that Windows "
+        "Home users receive the same protection as Pro users.",
+        "Measure with users whether the default view leads them to correct "
+        "conclusions faster than the advanced view.",
     ])
 
     # ==========================================================
