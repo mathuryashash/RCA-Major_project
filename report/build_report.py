@@ -21,10 +21,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 TEAM = [
-    ("Yashash Mathur", "1RFXXISXXX"),
-    ("Aditya Prakash", "1RFXXISXXX"),
-    ("Utsav Upadhyay", "1RFXXISXXX"),
-    ("Shresth Modi", "1RFXXISXXX"),
+    ("Yashash Mathur", "1RF23IS094"),
+    ("Aditya Prakash", "1RF23IS009"),
+    ("Utsav Upadhyay", "1RF23IS090"),
+    ("Shresth Modi", "1RF23IS078"),
 ]
 GUIDE = "Dr. Niharika P Kumar"
 GUIDE_DESIGNATION = "Associate Professor, Dept. of ISE, RVITM"
@@ -48,6 +48,20 @@ def set_base_style(doc):
     rFonts = OxmlElement("w:rFonts")
     rFonts.set(qn("w:eastAsia"), "Times New Roman")
     rPr.append(rFonts)
+    # Chapter and section titles use real Heading styles so the Word TOC field
+    # can list them; restyled here to the VTU sizes instead of Word's blue.
+    for name, size in (("Heading 1", 18), ("Heading 2", 16)):
+        st = doc.styles[name]
+        st.font.name = "Times New Roman"
+        st.font.size = Pt(size)
+        st.font.bold = True
+        st.font.italic = False
+        st.font.color.rgb = RGBColor(0, 0, 0)
+        for attr in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
+            st.element.rPr.rFonts.attrib.pop(qn(attr), None)
+        st.element.rPr.rFonts.set(qn("w:ascii"), "Times New Roman")
+        st.element.rPr.rFonts.set(qn("w:hAnsi"), "Times New Roman")
+        st.paragraph_format.keep_with_next = True
 
 
 def set_margins(section):
@@ -74,27 +88,25 @@ def add_centered(doc, text, size=12, bold=False, space_after=6, space_before=0, 
 def add_chapter_title(doc, number, title):
     """18pt centered chapter title, per VTU font table."""
     doc.add_page_break()
-    p = doc.add_paragraph()
+    # One Heading 1 paragraph (line break between the two lines) so the TOC
+    # gets a single "CHAPTER N  TITLE" entry per chapter.
+    p = doc.add_paragraph(style="Heading 1")
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.space_after = Pt(18)
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(24)
     run = p.add_run(f"CHAPTER {number}")
-    run.bold = True
     run.font.size = Pt(16)
-    p2 = doc.add_paragraph()
-    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p2.paragraph_format.space_after = Pt(24)
-    run2 = p2.add_run(title.upper())
-    run2.bold = True
+    run.add_break(WD_BREAK.LINE)
+    run2 = p.add_run(title.upper())
     run2.font.size = Pt(18)
 
 
 def add_section(doc, text, level=1):
     """16pt left for section headings, 14pt for subsections."""
-    p = doc.add_paragraph()
+    p = doc.add_paragraph(style="Heading 2")
     p.paragraph_format.space_before = Pt(14)
     p.paragraph_format.space_after = Pt(8)
     run = p.add_run(text)
-    run.bold = True
     run.font.size = Pt(16 if level == 1 else 14)
     return p
 
@@ -177,7 +189,7 @@ def add_toc_field(doc):
     fldChar2 = OxmlElement("w:fldChar")
     fldChar2.set(qn("w:fldCharType"), "separate")
     fldChar3 = OxmlElement("w:t")
-    fldChar3.text = "Table of contents — right-click and 'Update Field' in Word to populate."
+    fldChar3.text = "Open in Word and press F9 to build the table of contents."
     fldChar4 = OxmlElement("w:fldChar")
     fldChar4.set(qn("w:fldCharType"), "end")
     r_element = run._r
@@ -257,7 +269,7 @@ def build():
         "requirements in respect of project work prescribed for the said degree.")
 
     doc.add_paragraph()
-    sig_table = add_table(doc, ["Signature of Guide", "Signature of HoD", "Signature of the Principal"],
+    add_table(doc, ["Signature of Guide", "Signature of HoD", "Signature of the Principal"],
                            [[GUIDE, HOD, PRINCIPAL]])
     doc.add_paragraph()
     add_body(doc, "External Viva:", justify=False)
