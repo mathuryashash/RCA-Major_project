@@ -101,6 +101,16 @@ class AnomalyDetector:
         concatenates rather than handing over one array.
         """
         checkpoint_path = Path(checkpoint_path)
+        # Early-stopping snapshots are written here during training, before
+        # save_model_artifact's DPAPI-encrypted write replaces this same
+        # path -- redirected to a sibling .tmp file so a plaintext state_dict
+        # is never observable at the real model_path, even transiently.
+        _scratch_checkpoint = checkpoint_path.with_suffix(checkpoint_path.suffix + ".train_scratch")
+        # A prior run that crashed or was interrupted mid-training (OOM,
+        # Ctrl+C, a bad batch) could have left its own scratch file behind
+        # without ever reaching the cleanup below -- start clean rather than
+        # letting these accumulate silently across repeated failed runs.
+        _scratch_checkpoint.unlink(missing_ok=True)
         if windows is None:
             if len(normal_array) < self.window_size * 3:
                 raise ValueError(
@@ -118,39 +128,45 @@ class AnomalyDetector:
         criterion = nn.MSELoss()
         
         best_val_loss = float('inf')
-        
-        for epoch in range(epochs):
-            self.model.train()
-            total_loss = 0
-            
-            for batch in train_loader:
-                batch = batch.to(self.device)
-                optimizer.zero_grad()
-                
-                recon, _ = self.model(batch)
-                loss = criterion(recon, batch)
-                loss.backward()
-                optimizer.step()
-                total_loss += loss.item()
-                
-            val_loss = self._validate(val_data, criterion)
-            
-            if (epoch + 1) % 5 == 0:
-                print(f"Epoch {epoch+1}/{epochs} | Train Loss: {total_loss/len(train_loader):.4f} | Val Loss: {val_loss:.4f}")
 
-            # Training is the longest thing the desktop app does, and every
-            # epoch looks identical from outside, so a caller with a progress
-            # bar has nothing to show without this.
-            if on_epoch is not None:
-                on_epoch(epoch + 1, epochs, total_loss / len(train_loader), val_loss)
+        try:
+            for epoch in range(epochs):
+                self.model.train()
+                total_loss = 0
 
+                for batch in train_loader:
+                    batch = batch.to(self.device)
+                    optimizer.zero_grad()
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                torch.save(self.model.state_dict(), checkpoint_path)
-                
-        # Load best model for calibration
-        self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.device, weights_only=True))
+                    recon, _ = self.model(batch)
+                    loss = criterion(recon, batch)
+                    loss.backward()
+                    optimizer.step()
+                    total_loss += loss.item()
+
+                val_loss = self._validate(val_data, criterion)
+
+                if (epoch + 1) % 5 == 0:
+                    print(f"Epoch {epoch+1}/{epochs} | Train Loss: {total_loss/len(train_loader):.4f} | Val Loss: {val_loss:.4f}")
+
+                # Training is the longest thing the desktop app does, and every
+                # epoch looks identical from outside, so a caller with a progress
+                # bar has nothing to show without this.
+                if on_epoch is not None:
+                    on_epoch(epoch + 1, epochs, total_loss / len(train_loader), val_loss)
+
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    torch.save(self.model.state_dict(), _scratch_checkpoint)
+
+            # Load best model for calibration
+            self.model.load_state_dict(torch.load(_scratch_checkpoint, map_location=self.device, weights_only=True))
+        finally:
+            # Must run even if the loop above raised (OOM, CUDA error,
+            # KeyboardInterrupt): otherwise a plaintext state_dict is left on
+            # disk indefinitely, the exact leak the scratch-file redesign was
+            # meant to close -- see the comment on _scratch_checkpoint above.
+            _scratch_checkpoint.unlink(missing_ok=True)
         self._calibrate_thresholds(val_data)
         
     def _validate(self, val_data: torch.Tensor, criterion: nn.Module) -> float:

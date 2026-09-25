@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import logging
-from typing import Dict, List, Tuple
+from typing import List
 from scipy import stats
 
 from anomaly_detection.anomaly_scorer import AnomalyDetector

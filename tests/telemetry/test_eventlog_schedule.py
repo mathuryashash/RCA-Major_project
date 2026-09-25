@@ -65,7 +65,6 @@ def test_event_log_reader_talks_to_the_real_api(tmp_path):
     ingestion returned 0 forever while every parser test still passed.
     """
     pytest.importorskip("win32evtlog")
-    from telemetry import store
     from telemetry.eventlog import EventLogReader, watermark_key
 
     reader = EventLogReader("System")
@@ -272,5 +271,5 @@ def test_supervisor_survives_an_apostrophe_in_the_profile_path(tmp_path, monkeyp
 
     assert "O''Brien" in script, "the apostrophe must be doubled, not passed through"
     # The assignment must be exactly one balanced single-quoted literal.
-    line = next(l for l in script.splitlines() if l.startswith("$collector ="))
+    line = next(row for row in script.splitlines() if row.startswith("$collector ="))
     assert line.count("'") % 2 == 0, f"unbalanced quoting: {line}"

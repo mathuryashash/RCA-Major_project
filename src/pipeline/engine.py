@@ -34,10 +34,10 @@ from telemetry.analysis import (
     load_events,
     load_process_attribution,
     load_samples,
+    latest_sample_ts,
     merge_incidents,
     DEFAULT_WINDOW_SIZE,
     modelled_features,
-    required_samples,
 )
 
 # A model is stale when the recent median reconstruction error drifts beyond
@@ -140,18 +140,19 @@ def detect_incidents(
     ``min_consecutive`` samples are dropped as single-sample noise, and windows
     within five minutes of each other are merged so one episode is one report.
     """
-    samples = load_samples(db_path)
-    events = load_events(db_path)
-
     # Both triggers must honour the same cutoff. Filtering only the detector
     # side would let a "last 7 days" view show event incidents from the full
-    # 365-day event retention.
-    if samples.empty:
+    # 365-day event retention. Resolve the cutoff from a cheap MAX(ts) lookup
+    # first so both loads can be pushed down as an indexed SQL range instead
+    # of pulling the whole table and discarding most of it in pandas.
+    latest = latest_sample_ts(db_path)
+    if latest is None:
         cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=lookback_hours)
+        samples = load_samples(db_path)
     else:
-        cutoff = samples["timestamp"].max() - pd.Timedelta(hours=lookback_hours)
-    if not events.empty:
-        events = events.loc[events["timestamp"] >= cutoff]
+        cutoff = pd.Timestamp(latest, unit="s", tz="UTC") - pd.Timedelta(hours=lookback_hours)
+        samples = load_samples(db_path, start_ts=int(cutoff.timestamp()))
+    events = load_events(db_path, start_ts=int(cutoff.timestamp()))
 
     incidents: List[Incident] = list(event_incidents(events))
 
@@ -232,33 +233,30 @@ def window_between(
     db_path: str | Path, start: pd.Timestamp, end: pd.Timestamp
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Samples and correlated events for an explicit time range."""
-    samples = load_samples(db_path)
-    events = load_events(db_path)
+    samples = load_samples(db_path, start_ts=int(start.timestamp()), end_ts=int(end.timestamp()))
     if samples.empty:
         raise ValueError("No collected telemetry is available for RCA.")
-    window = samples.loc[samples["timestamp"].between(start, end)].reset_index(drop=True)
-    relevant = (
-        events.loc[events["timestamp"].between(start - pd.Timedelta(hours=1), end)].reset_index(drop=True)
-        if not events.empty else events
-    )
+    window = samples.reset_index(drop=True)
+    event_start = start - pd.Timedelta(hours=1)
+    relevant = load_events(db_path, start_ts=int(event_start.timestamp()), end_ts=int(end.timestamp()))
     return window, relevant
 
 
 def recent_real_window(db_path: str | Path, hours: int = 24) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Return the latest real incident window and relevant real Windows events."""
-    samples = load_samples(db_path)
-    events = load_events(db_path)
+    latest = latest_sample_ts(db_path)
+    if latest is None:
+        raise ValueError("No collected telemetry is available for RCA.")
+    start = pd.Timestamp(latest, unit="s", tz="UTC") - pd.Timedelta(hours=hours)
+    samples = load_samples(db_path, start_ts=int(start.timestamp()))
     if samples.empty:
         raise ValueError("No collected telemetry is available for RCA.")
-    start = samples["timestamp"].max() - pd.Timedelta(hours=hours)
     # load_events only adds a timestamp column to a non-empty frame, so an
     # empty event table must not be filtered on it. A machine that has logged
     # no allowlisted events yet is normal, not an error.
-    relevant = (
-        events.loc[events["timestamp"] >= start - pd.Timedelta(hours=24)].reset_index(drop=True)
-        if not events.empty else events
-    )
-    return samples.loc[samples["timestamp"] >= start].reset_index(drop=True), relevant
+    event_start = start - pd.Timedelta(hours=24)
+    events = load_events(db_path, start_ts=int(event_start.timestamp()))
+    return samples.reset_index(drop=True), events.reset_index(drop=True)
 
 
 def save_model_artifact(
@@ -269,11 +267,21 @@ def save_model_artifact(
     reference_recon_error: Optional[float] = None,
     training_samples: Optional[int] = None,
 ) -> None:
-    """Persist model, thresholds, scaler, and feature order as one reloadable artifact."""
+    """Persist model, thresholds, scaler, and feature order as one reloadable artifact.
+
+    Written through DPAPI (see telemetry.secure_storage) so the file on disk
+    is ciphertext bound to the current Windows user, not a bare PyTorch
+    pickle -- the model artifact is the one file here dense enough to be
+    worth encrypting on its own rather than relying only on folder-level EFS.
+    """
+    import io
     import torch
+
+    from telemetry.secure_storage import save_encrypted
 
     path = Path(model_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    buffer = io.BytesIO()
     torch.save({
         "format_version": 1,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -293,14 +301,24 @@ def save_model_artifact(
         "scaler_data_max": scaler.data_max_.tolist(),
         "scaler_data_range": scaler.data_range_.tolist(),
         "scaler_n_features_in": scaler.n_features_in_,
-    }, path)
+    }, buffer)
+    save_encrypted(path, buffer.getvalue())
 
 
 def load_model_artifact(model_path: str | Path) -> Tuple[AnomalyDetector, MinMaxScaler, List[str]]:
-    """Load an artifact written by :func:`save_model_artifact`."""
+    """Load an artifact written by :func:`save_model_artifact`.
+
+    Transparently handles both a DPAPI-encrypted artifact (current format)
+    and a plaintext one written before encryption was added, so an existing
+    installation is not broken by this upgrade.
+    """
+    import io
     import torch
 
-    artifact = torch.load(model_path, map_location="cpu", weights_only=True)
+    from telemetry.secure_storage import load_encrypted
+
+    raw = load_encrypted(model_path)
+    artifact = torch.load(io.BytesIO(raw), map_location="cpu", weights_only=True)
     required = {"feature_columns", "window_size", "state_dict", "threshold_per_metric"}
     if not isinstance(artifact, dict) or not required.issubset(artifact):
         raise ValueError("Model artifact is not a supported telemetry model bundle.")
@@ -389,8 +407,12 @@ def train_model(
     os.makedirs(os.path.dirname(model_path) or ".", exist_ok=True)
 
     if skip_train and os.path.exists(model_path):
+        import io
         import torch
-        checkpoint = torch.load(model_path, map_location="cpu", weights_only=True)
+
+        from telemetry.secure_storage import load_encrypted
+
+        checkpoint = torch.load(io.BytesIO(load_encrypted(model_path)), map_location="cpu", weights_only=True)
         detector.model.load_state_dict(checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint)
         windows = detector.create_windows(normal_scaled.astype(np.float32), stride=5)
         split = int(len(windows) * 0.8)
@@ -997,7 +1019,6 @@ def generate_reports(
             "edges": edges_serializable,
         },
         "event_correlations": results.get("event_correlations", []),
-        "process_attribution": results.get("process_attribution", []),
         "anomaly_detection_times": {k: str(v) for k, v in anomaly_times.items()},
     }
 

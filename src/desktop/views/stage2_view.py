@@ -2,6 +2,7 @@
 
 import pandas as pd
 from PySide6.QtCore import QDateTime, Qt
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout, QSpinBox,
     QPushButton, QProgressBar, QLabel, QTableWidget, QTableWidgetItem,
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import (
     QHeaderView, QSizePolicy,
 )
 
+from desktop.theme import TEXT_MUTED
 from desktop.workers import DetectIncidentsWorker, InferenceWorker, model_path
 from desktop.views.graph_panel import FigurePanel
 from pipeline import engine
@@ -54,6 +56,12 @@ class Stage2View(QWidget):
         self.lag_spin.setAccessibleName("Granger maximum lag")
         self.lag_spin.setRange(2, 10)
         self.lag_spin.setValue(5)
+        self.lag_spin.setToolTip(
+            "How many time-steps back Granger causality tests when asking whether "
+            "one metric's change explains another's. Higher values catch slower "
+            "cause-and-effect delays but need more data before a candidate can be "
+            "tested at all."
+        )
         form.addRow("Granger Max Lag", self.lag_spin)
 
         self.estimate_label = QLabel("—")
@@ -107,9 +115,17 @@ class Stage2View(QWidget):
         # did not, so before the first run this panel was simply blank.
         self.root_cause_table.setRowCount(1)
         self.root_cause_table.setSpan(0, 0, 1, 6)
-        self.root_cause_table.setItem(0, 0, QTableWidgetItem(
+        placeholder_item = QTableWidgetItem(
             "Ranked candidates appear here after an analysis."
-        ))
+        )
+        # Styled to match the muted, italic empty state used by the other two
+        # result tabs (FigurePanel.show_placeholder) -- otherwise this row
+        # renders identically to a real result and reads as one.
+        placeholder_font = QFont()
+        placeholder_font.setItalic(True)
+        placeholder_item.setFont(placeholder_font)
+        placeholder_item.setForeground(QColor(TEXT_MUTED))
+        self.root_cause_table.setItem(0, 0, placeholder_item)
         self.results_tabs.addTab(self.root_cause_table, "Root Causes")
 
         self.graph_view = FigurePanel(
@@ -277,6 +293,7 @@ class Stage2View(QWidget):
         self.worker.progress.connect(self._on_progress)
         self.worker.finished_ok.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
+        self.worker.empty.connect(self._on_empty)
         self.worker.start()
 
     def _on_progress(self, pct, message):
@@ -384,12 +401,23 @@ class Stage2View(QWidget):
         self.progress_bar.setValue(0)
         self.status_label.setText(f"Failed: {message}")
         # A verdict from an earlier run is not merely stale here, it is wrong:
-        # the worker reports "no anomalies were detected" through this path,
-        # so the commonest benign outcome left the previous run's "Likely root
-        # cause: X -- supported by 6 causal edges" sitting above a failure
-        # line. Nothing is a safer thing to say than something untrue.
+        # a genuine failure means this run produced nothing, so the previous
+        # run's "Likely root cause: X -- supported by 6 causal edges" must not
+        # sit above a failure line. Nothing is a safer thing to say than
+        # something untrue.
         self.verdict.setVisible(False)
         self.verdict.clear()
+        self._apply_model_gate(True)
+
+    def _on_empty(self, message):
+        # No anomaly in the window is a real, honest result, not an error --
+        # it must never be styled or worded like one. Previously this path
+        # was routed through `failed`, which printed "Failed: No anomalies
+        # were detected", directly contradicting the project's own stance
+        # that a quiet result is a result, not a failure.
+        self.progress_bar.setValue(0)
+        self.status_label.setText(message)
+        self._set_verdict({"causal_support": None}, [])
         self._apply_model_gate(True)
 
     def _export_md(self):

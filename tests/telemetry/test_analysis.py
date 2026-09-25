@@ -1,6 +1,6 @@
 import pandas as pd
 
-from telemetry.analysis import baseline_status, clean_baseline, contiguous_windows, modelled_features
+from telemetry.analysis import clean_baseline, contiguous_windows, modelled_features
 
 
 def _samples(count=70):

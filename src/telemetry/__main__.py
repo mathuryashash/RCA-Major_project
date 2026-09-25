@@ -18,6 +18,22 @@ def _open():
     return connection
 
 
+def _enable_at_rest_encryption() -> None:
+    """Best-effort EFS on the app data folder; never blocks collection.
+
+    Called once per process start rather than once per tick -- cipher.exe
+    walking the directory is not free, and encryption status does not need
+    checking every 30 seconds once it has been applied.
+    """
+    from .secure_storage import enable_folder_encryption
+
+    try:
+        enable_folder_encryption(config.app_dir())
+    except Exception:
+        # Never let an encryption attempt stop collection from starting.
+        pass
+
+
 def _remove_rendered_figures() -> None:
     """Clear rendered figures the desktop app left in the temp directory.
 
@@ -136,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     if not acquire_singleton():
         print("Another collector is already running; this instance will exit.", file=sys.stderr)
         return 0
+    _enable_at_rest_encryption()
     # The collector is the only packaged process guaranteed to run, so it is
     # what keeps the application findable by name after a rebuild removes the
     # shortcut's target. Never fatal: failing to be searchable must not stop

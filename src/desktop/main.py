@@ -158,7 +158,14 @@ def _ensure_collector_running() -> None:
             # who launched the app directly does not wait for the next logon.
             schedule.heal_start_menu_shortcut()
     except Exception:  # noqa: BLE001 - the GUI must open regardless
-        pass
+        # Must not be silent: the whole background-collection value prop
+        # depends on this succeeding, and a broken consent/schedule import
+        # previously failed with zero trace in desktop.log, indistinguishable
+        # from the user simply declining consent.
+        import logging
+        logging.getLogger("desktop").exception(
+            "Failed to ensure the collector is running / registered"
+        )
 
 
 def main() -> None:

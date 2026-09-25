@@ -106,11 +106,37 @@ class Incident:
         return (self.end - self.start).total_seconds() / 60.0
 
 
-def load_samples(path: Path | str | None = None) -> pd.DataFrame:
-    """Return collector samples in timestamp order with real datetimes."""
+def load_samples(
+    path: Path | str | None = None,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
+) -> pd.DataFrame:
+    """Return collector samples in timestamp order with real datetimes.
+
+    ``ts`` is the table's INTEGER PRIMARY KEY, so a ``WHERE`` on it is an
+    indexed range seek, not a scan. Every RCA-time caller already knows the
+    window it wants before it asks for samples; passing ``start_ts``/
+    ``end_ts`` here turns "load the whole history, then discard most of it
+    in pandas" into "load only the window", which stops mattering less and
+    less as retention grows and starts mattering a lot once it's months of
+    30-second rows. Callers that genuinely need full history (training,
+    readiness) simply omit both bounds and get today's behaviour.
+    """
+    query = "SELECT * FROM samples"
+    clauses = []
+    params: list[int] = []
+    if start_ts is not None:
+        clauses.append("ts >= ?")
+        params.append(int(start_ts))
+    if end_ts is not None:
+        clauses.append("ts <= ?")
+        params.append(int(end_ts))
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY ts"
     connection = sqlite3.connect(str(path or config.db_path()))
     try:
-        frame = pd.read_sql_query("SELECT * FROM samples ORDER BY ts", connection)
+        frame = pd.read_sql_query(query, connection, params=params)
     finally:
         connection.close()
     if frame.empty:
@@ -119,10 +145,42 @@ def load_samples(path: Path | str | None = None) -> pd.DataFrame:
     return frame
 
 
-def load_events(path: Path | str | None = None) -> pd.DataFrame:
+def latest_sample_ts(path: Path | str | None = None) -> int | None:
+    """The most recent collected sample's epoch second, or ``None`` if empty.
+
+    Cheap indexed lookup (``MAX(ts)`` on the ``ts`` primary key) used by
+    callers that need "now, as the collector sees it" to compute a cutoff
+    before loading the window they actually want -- without first paying
+    for a full-table load just to find that one value.
+    """
     connection = sqlite3.connect(str(path or config.db_path()))
     try:
-        frame = pd.read_sql_query("SELECT * FROM events ORDER BY ts", connection)
+        row = connection.execute("SELECT MAX(ts) FROM samples").fetchone()
+    finally:
+        connection.close()
+    return int(row[0]) if row and row[0] is not None else None
+
+
+def load_events(
+    path: Path | str | None = None,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
+) -> pd.DataFrame:
+    query = "SELECT * FROM events"
+    clauses = []
+    params: list[int] = []
+    if start_ts is not None:
+        clauses.append("ts >= ?")
+        params.append(int(start_ts))
+    if end_ts is not None:
+        clauses.append("ts <= ?")
+        params.append(int(end_ts))
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY ts"
+    connection = sqlite3.connect(str(path or config.db_path()))
+    try:
+        frame = pd.read_sql_query(query, connection, params=params)
     finally:
         connection.close()
     if not frame.empty:

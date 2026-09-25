@@ -218,7 +218,6 @@ def test_process_sampling_survives_a_failure_raised_by_the_iterator(monkeypatch)
 
 def test_a_corrupt_database_is_moved_aside_and_replaced(tmp_path):
     """An unclean shutdown must not leave the app opening to a traceback."""
-    import sqlite3
 
     from telemetry import store
 

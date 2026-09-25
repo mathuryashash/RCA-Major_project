@@ -38,7 +38,7 @@
   store/.style  = {cylinder, shape border rotate=90, aspect=0.25, draw, thick,
                    minimum width=16mm, minimum height=10mm, align=center,
                    font=\scriptsize},
-  step/.style   = {rectangle, draw, thick, minimum width=30mm,
+  flowstep/.style = {rectangle, draw, thick, minimum width=30mm,
                    minimum height=7mm, align=center, font=\scriptsize},
   gate/.style   = {diamond, draw, thick, aspect=2.2, inner sep=1pt,
                    align=center, font=\scriptsize},
@@ -49,15 +49,24 @@
   subsys/.style = {circle, draw, thick, minimum size=9mm, font=\scriptsize},
 }
 
+% Shrink-to-fit, never enlarge. Several diagrams are laid out in millimetres
+% and come out wider than the 88.9mm IEEE column -- the architecture diagram
+% spans ~97mm, the topology chain ~97mm -- so they bled into the neighbouring
+% column. A plain \resizebox{\columnwidth} would also *stretch* the narrow
+% ones, and the pipeline flowchart is already tall enough that scaling it up
+% by half would push it off the page.
+\newcommand{\fitcol}[1]{%
+  \resizebox{\ifdim\width>\columnwidth\columnwidth\else\width\fi}{!}{#1}}
+
 \begin{document}
 
 \title{LocalRCA: On-Device Root Cause Analysis for Windows\\Endpoints Without
 Ground Truth}
 
 \author{\IEEEauthorblockN{Yashash Mathur}
-\IEEEauthorblockA{\textit{Department of Computer Science} \\
-\textit{Institution Name}\\
-City, Country \\
+\IEEEauthorblockA{\textit{Department of Computer Science and Engineering} \\
+\textit{RV Institute of Technology and Management}\\
+Bangalore, Karnataka, India \\
 yashashgdg@gmail.com}
 }
 
@@ -76,15 +85,15 @@ the endpoint; the collector opens no sockets, and the only network capability
 is an opt-in, off-by-default check for a newer release that transmits nothing. Because a personal machine
 offers no labelled incidents, we evaluate in two ways: seven controlled fault
 injections, which supply ground truth by construction, and a population survey
-that replays the pipeline over 210 incidents discovered in real collected
+that replays the pipeline over 596 incidents discovered in real collected
 history. The system detects and correctly attributes injected CPU, disk and
 memory faults, and in one case produced a correct causal explanation of a
 fault it was never told about, with six surviving edges oriented away from the
 injected cause. Across real history it produces a supported causal chain for
-$29$ of $210$ incidents ($14.3\%$), with $46\%$ falling below the Granger
+$106$ of $596$ incidents ($17.8\%$), with $36\%$ falling below the Granger
 sample floor and therefore untestable at the default lag. We further show that
-the hand-written subsystem prior rejects $26\%$ of statistically accepted
-pairs and forbids three mechanisms that demonstrably exist. We argue that the
+the hand-written subsystem prior rejects $22.7\%$ of statistically accepted
+pairs and forbids mechanisms that demonstrably exist. We argue that the
 most useful property of such a system is its willingness to report that it
 cannot explain an incident, and we quantify how often that occurs.
 \end{abstract}
@@ -167,6 +176,20 @@ exists on a single endpoint, which motivates our explicit, inspectable
 subsystem map---and, as Section~\ref{sec:topology} shows, makes the quality of
 that map a first-order concern.
 
+\textbf{Benchmarked causal RCA at fleet scale.} Recent work evaluates causal
+discovery for root cause analysis at a scale this system does not attempt.
+Ikram et al.~\cite{ikram2022root} discover root causes across thousands of
+microservice nodes and report top-$k$ recall against ground truth gathered
+from a real production incident corpus. Pham et al.~\cite{pham2024root}
+benchmark six causal-RCA methods (including CausalRCA and BARO) across
+microservice architectures and find that none dominates uniformly, that
+performance is highly sensitive to the underlying call graph, and that
+published recall numbers do not transfer cleanly between systems. Both
+works assume a call graph or trace corpus that a single endpoint does not
+have; the corresponding gap here is that our $596$-incident survey has no
+comparable ground truth, so Section~\ref{sec:population} reports how often
+the system speaks, not how often it is correct against a labelled corpus.
+
 \textbf{Positioning.} The distinguishing constraints of this work are the
 single-machine scope, the absence of ground truth, and a deliberate design
 commitment to reporting uncertainty rather than producing a ranking regardless
@@ -182,20 +205,20 @@ the user interface being closed.
 
 \begin{figure}[t]
 \centering
+\fitcol{%
 \begin{tikzpicture}[node distance=6mm]
   \node[proc] (coll) {RCA-Collector.exe\\\textit{headless, at logon}};
   \node[store, below=12mm of coll] (db) {telemetry.db\\\textit{SQLite, WAL}};
-  \node[proc, right=26mm of coll] (gui) {RCA-Desktop.exe\\\textit{PySide6 / Qt\,6}};
-  \node[proc, left=14mm of db, minimum width=16mm] (sup) {supervise\\.ps1};
+  \node[proc, right=16mm of coll] (gui) {RCA-Desktop.exe\\\textit{PySide6 / Qt\,6}};
+  \node[proc, left=8mm of db, minimum width=16mm] (sup) {supervise\\.ps1};
 
   \draw[flow] (coll) -- node[left, font=\tiny] {write} (db);
   \draw[flow] (db) -- node[right, font=\tiny] {read only} (gui);
   \draw[flow] (sup) |- ([yshift=-3mm]coll.south west) -- (coll);
-  \node[font=\tiny, right=1mm of coll.east, yshift=4mm] {};
 
-  \node[font=\tiny, align=left, below=3mm of db] {%
-    30\,s system sample \quad 300\,s process scan \quad 300\,s event poll};
-\end{tikzpicture}
+  \node[font=\tiny, align=center, below=3mm of db] {%
+    30\,s system sample \quad 300\,s process scan\\ 300\,s event poll};
+\end{tikzpicture}}
 \caption{Process architecture. The collector writes; the desktop application
 only reads. A PowerShell supervisor restarts the collector if it exits
 unexpectedly, because creating a Task Scheduler logon task requires elevation
@@ -294,15 +317,16 @@ ranking as causal.
 
 \begin{figure}[t]
 \centering
+\fitcol{%
 \begin{tikzpicture}[node distance=4.5mm]
   \node[term] (start) {incident window};
-  \node[step, below=of start] (scale) {scale, clip to $[0,1]$};
-  \node[step, below=of scale] (score) {autoencoder: $s_j$ vs $\tau_j$};
+  \node[flowstep, below=of start] (scale) {scale, clip to $[0,1]$};
+  \node[flowstep, below=of scale] (score) {autoencoder: $s_j$ vs $\tau_j$};
   \node[gate, below=of score, minimum width=20mm] (any) {any\\flagged?};
   \node[term, right=10mm of any] (none) {nothing\\anomalous};
   \node[gate, below=8mm of any, minimum width=20mm] (floor) {$N \ge 3L{+}2$?};
   \node[term, right=10mm of floor] (untested) {\textbf{not tested}\\window too short};
-  \node[step, below=8mm of floor] (granger) {Granger $\rightarrow$ BH FDR\\$\rightarrow$ effect floor};
+  \node[flowstep, below=8mm of floor] (granger) {Granger $\rightarrow$ BH FDR\\$\rightarrow$ effect floor};
   \node[gate, below=of granger, minimum width=20mm] (edges) {edges\\survive?};
   \node[term, right=10mm of edges] (corr) {\textbf{correlation only}\\no causal claim};
   \node[term, below=8mm of edges] (ok) {\textbf{supported}\\ranked chain};
@@ -317,7 +341,7 @@ ranking as causal.
   \draw[flow] (granger) -- (edges);
   \draw[flow] (edges) -- node[above, font=\tiny] {no} (corr);
   \draw[flow] (edges) -- node[left, font=\tiny] {yes} (ok);
-\end{tikzpicture}
+\end{tikzpicture}}
 \caption{Inference pipeline. Four terminal states are reported distinctly.
 Collapsing ``not tested'' into ``nothing survived'' would conflate the absence
 of a result with a negative result, which earlier revisions of this system did.}
@@ -339,6 +363,7 @@ injection window, and scores the result.
 \label{tab:injection}
 \centering
 \footnotesize
+\fitcol{%
 \begin{tabular}{@{}llccl@{}}
 \toprule
 \textbf{Fault} & \textbf{Samples} & \textbf{Flagged} & \textbf{Edges} & \textbf{Outcome} \\
@@ -351,7 +376,7 @@ Memory (refixed) & 60 & 3/29 & 0 & detected, attributed \\
 Memory (clean)   & 60 & 0/29 & --- & not measurable on host \\
 Idle             & 60 & 1/29 & --- & 3.4\% false positives \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \subsection{A correct explanation of an unknown cause}
@@ -361,8 +386,11 @@ pipeline. The ranking named \texttt{cpu\_pct} first at $1.000$, and the
 surviving edges are oriented \emph{away} from CPU---the signature of a genuine
 root cause, since nothing upstream drives it:
 \[
-\texttt{cpu\_pct\_max\_core} \rightarrow \texttt{disk\_busy\_pct}
-\quad (\text{lag } 2,\ 0.756).
+\texttt{cpu\_pct\_max\_core} 
+\rightarrow \texttt{disk\_busy\_pct}
+\]
+\[
+(\text{lag } 2,\ 0.756).
 \]
 
 \subsection{Starvation, not failure}
@@ -406,11 +434,12 @@ incident discoverable in real collected history---no injection, read-only.
 
 \begin{figure}[t]
 \centering
+\fitcol{%
 \begin{tikzpicture}
 \begin{axis}[
   width=\columnwidth, height=4.4cm,
   ybar, bar width=11pt,
-  ymin=0, ymax=65,
+  ymin=0, ymax=75,
   ylabel={\footnotesize explained (\%)},
   xlabel={\footnotesize incident window length},
   symbolic x coords={0--30,30--60,60--120,120--360,360+},
@@ -421,33 +450,35 @@ incident discoverable in real collected history---no injection, read-only.
   grid=major, grid style={dashed,gray!25},
 ]
 \addplot[fill=blue!55] coordinates
-  {(0--30,19) (30--60,24) (60--120,42) (120--360,56) (360+,40)};
+  {(0--30,14.7) (30--60,33.3) (60--120,54.3) (120--360,58.1) (360+,63.6)};
 \end{axis}
-\end{tikzpicture}
-\caption{Causal yield against window length, over 113 analysable incidents.
-The rate roughly doubles once windows exceed one hour, confirming at scale the
-starvation effect first seen in a single pair of injections. The final bar
-represents five incidents and should not be read as a downward trend.}
+\end{tikzpicture}}
+\caption{Causal yield against window length, over 381 analysable incidents
+($L=5$, 30-day survey). The rate rises monotonically with window length,
+confirming at scale the starvation effect first seen in a single pair of
+injections.}
 \label{fig:yield}
 \end{figure}
 
-Of $210$ incidents discovered, $97$ ($46\%$) fall below the sample floor of
-\eqref{eq:floor} and cannot be tested at any setting. Of the $113$ that can be,
-$30$ produce a supported causal chain. The end-to-end figure a user experiences
-is therefore $30/210 = 14.3\%$: roughly one incident in seven receives a causal
+Of $596$ incidents discovered, $215$ ($36\%$) fall below the sample floor of
+\eqref{eq:floor} and cannot be tested at any setting. Of the $381$ that can be,
+$106$ produce a supported causal chain. The end-to-end figure a user experiences
+is therefore $106/596 = 17.8\%$: roughly one incident in six receives a causal
 explanation.
 
 We report the funnel rather than the survivor-filtered rate. The share of
-\emph{analysable} incidents explained is $26.5\%$, which is the more flattering
+\emph{analysable} incidents explained is $27.8\%$, which is the more flattering
 number and describes fewer situations.
 
 \textbf{The floor is a parameter artefact.} Short incidents are widened before
 analysis to exactly the model's window size, 15 samples, while~\eqref{eq:floor}
 at $L=5$ requires 17---two constants chosen independently in the same pipeline.
-Re-running the survey at $L\in\{3,4,5\}$ over an identical population shows the
-cliff disappears at $L\le4$, but recovers little: explanations rise only from
-$30$ to $34$ while the tested population nearly doubles, and median surviving
-edges falls from $2$ to $1$. The gain is honest reporting---``tested, nothing
+Re-running the survey at $L\in\{3,4,5\}$ over an identical population (598
+incidents discovered over 30 days of real collected history) confirms the
+cliff disappears at $L\le3$: 0 incidents fall below the floor, versus 215 at
+$L=5$. Explanations rise only modestly, from $106$ to $110$, while the tested
+population nearly triples (381 to 598), and median surviving edges holds at
+$2$ throughout. The gain is honest reporting---``tested, nothing
 found'' instead of ``not tested''---rather than insight.
 
 %==============================================================================
@@ -458,12 +489,13 @@ found'' instead of ``not tested''---rather than insight.
 Since no service call graph exists on an endpoint, the system encodes domain
 knowledge as an explicit map of permissible subsystem influence. Auditing it
 across all analysable incidents shows it is the largest single filter in the
-pipeline after the statistical gates: of $115$ accepted pairs, $65$ survive,
-$30$ ($26\%$) are rejected by the map and $20$ ($17\%$) by cycle-breaking.
+pipeline after the statistical gates: of $459$ accepted pairs, $337$ survive,
+$122$ ($22.7\%$) are rejected by the map and $79$ ($14.7\%$) by cycle-breaking.
 
 \begin{figure}[t]
 \centering
-\begin{tikzpicture}[node distance=13mm]
+\fitcol{%
+\begin{tikzpicture}[node distance=9mm]
   \node[subsys] (pow) {pow};
   \node[subsys, right=of pow] (cpu) {cpu};
   \node[subsys, right=of cpu] (mem) {mem};
@@ -475,35 +507,42 @@ $30$ ($26\%$) are rejected by the map and $20$ ($17\%$) by cycle-breaking.
   \draw[flow] (mem) -- (dsk);
   \draw[flow] (dsk) -- (net);
 
-  \draw[flow, red, dashed] (dsk) to[bend left=38] node[above, font=\tiny] {13} (mem);
-  \draw[flow, red, dashed] (mem) to[bend left=42] node[below=1mm, font=\tiny] {7} (cpu);
+  \draw[flow, red, dashed] (dsk) to[bend left=38] node[above, font=\tiny] {55} (mem);
+  \draw[flow, red, dashed] (mem) to[bend left=42] node[below=1mm, font=\tiny] {24} (cpu);
   \draw[flow, red, dashed] (net) to[bend left=52] node[above, font=\tiny] {4} (dsk);
-  \draw[flow, red, dashed] (dsk) to[bend right=52] node[below, font=\tiny] {3} (cpu);
-\end{tikzpicture}
+  \draw[flow, red, dashed] (dsk) to[bend right=52] node[below, font=\tiny] {26} (cpu);
+\end{tikzpicture}}
 \caption{The subsystem prior is a strict total order (solid), so
 \texttt{network} is a sink and nothing can be reported as caused by network
 activity. Dashed edges are directions the statistics accepted and the map
-rejected, labelled with occurrence counts. Three of them describe real
-mechanisms: a download writing to disk, the file cache consuming memory, and
-interrupt handling costing CPU.}
+rejected, labelled with occurrence counts (30-day, 596-incident survey).
+Two of them describe real
+mechanisms: the file cache consuming memory under write pressure, and
+interrupt handling costing CPU during disk activity; a download writing to
+disk (\texttt{network}$\rightarrow$\texttt{disk}) remains a smaller but
+real third case.}
 \label{fig:topology}
 \end{figure}
 
 Every rejected transition has \emph{zero} survivors, because the map forbids
 whole classes rather than individual edges (Fig.~\ref{fig:topology}). Judged
-individually, \texttt{network}\,$\rightarrow$\,\texttt{disk} is almost certainly
-real---a download arrives over the network and is written to disk---and the
-strongest single relationship measured anywhere in this work, at $0.982$, is
-exactly this pair. \texttt{disk}\,$\rightarrow$\,\texttt{memory} reflects the
-Windows standby file cache, and \texttt{disk}\,$\rightarrow$\,\texttt{cpu}
-reflects interrupt and DPC handling. Conversely,
-\texttt{memory}\,$\rightarrow$\,\texttt{process} cleared the effect floor by
-$0.009$ and is plausibly spurious.
+individually, \texttt{disk}\,$\rightarrow$\,\texttt{memory} is almost certainly
+real---the Windows standby file cache expanding under write pressure---and is
+the strongest single rejected relationship measured in this run, at $0.654$
+(\texttt{disk\_write\_bps}$\rightarrow$\texttt{swap\_used\_delta}, lag 2).
+\texttt{disk}\,$\rightarrow$\,\texttt{cpu}
+reflects interrupt and DPC handling, and \texttt{network}\,$\rightarrow$\,
+\texttt{disk} is the download-writes-to-disk case argued in the prior
+revision of this analysis, present but smaller in this run (4 occurrences).
+Conversely, the smallest rejected classes
+(\texttt{network}$\rightarrow$\texttt{process},
+\texttt{disk}$\rightarrow$\texttt{process}, at 1--2 occurrences each) are
+plausibly spurious rather than real mechanisms being wrongly forbidden.
 
 The prior is therefore not so much wrong as \emph{one-directional}: it models
 resource pressure flowing downhill and has no vocabulary for the feedback that
 makes I/O expensive. Adding the reverse edges would make the graph cyclic,
-where cycle-breaking already removes $17\%$ of pairs---so the two mechanisms
+where cycle-breaking already removes $14.7\%$ of pairs---so the two mechanisms
 would begin to compete. We record this as an open design question rather than
 patching it.
 
@@ -516,8 +555,8 @@ generality, and one measurement---memory-fault detection---is provably
 unobtainable on this host, which makes second hardware a prerequisite rather
 than an enhancement.
 
-\textbf{Correctness is not established at population scale.} The survey's 210
-incidents have no known cause, so a $14.3\%$ explanation rate reports how often
+\textbf{Correctness is not established at population scale.} The survey's 596
+incidents have no known cause, so a $17.8\%$ explanation rate reports how often
 the layer speaks, never whether it is right. The rate is a ceiling on
 usefulness, not a measure of accuracy.
 
@@ -531,7 +570,7 @@ suppress the resulting over-reporting, and Section~\ref{sec:topology} shows the
 prior itself is imperfect.
 
 \textbf{A methodological observation.} Nine defects were found in code carrying
-a passing test suite of 130 tests. In nearly every case the test asked a
+a passing test suite of 142 tests. In nearly every case the test asked a
 question \emph{adjacent} to the one that mattered---a database value instead of
 the bytes on disk, one file instead of the full storage footprint, a function
 instead of the code path calling it. Two fixes were worse than the defects they
@@ -546,7 +585,7 @@ We presented an on-device root cause analysis system for Windows endpoints
 operating without ground truth, network access or fleet context. Under
 controlled injection it detects and attributes CPU, disk and memory faults, and
 has produced a correct causal explanation of a fault it was never told about.
-Across real history it explains roughly one incident in seven, declines to
+Across real history it explains roughly one incident in six, declines to
 explain the rest, and distinguishes ``not tested'' from ``tested and nothing
 survived''.
 
@@ -591,6 +630,17 @@ architecture,'' in \emph{Proc. ACM SIGMETRICS}, 2013, pp. 93--104.
 P.~Chen, Y.~Qi, P.~Zheng, and D.~Hou, ``CauseInfer: automatic and distributed
 performance diagnosis with hierarchical causality graph in large distributed
 systems,'' in \emph{Proc. IEEE INFOCOM}, 2014, pp. 1887--1895.
+
+\bibitem{ikram2022root}
+A.~Ikram, S.~Chakraborty, S.~Mitra, S.~Saini, S.~Bagchi, and M.~Kocaoglu,
+``Root cause analysis of failures in microservices through causal
+discovery,'' in \emph{Advances in Neural Information Processing Systems
+(NeurIPS)}, vol.~35, 2022, pp. 31 158--31 170.
+
+\bibitem{pham2024root}
+L.~Pham, H.~Ha, and H.~Zhang, ``Root cause analysis for microservice system
+based on causal inference: How far are we?'' in \emph{Proc. 39th IEEE/ACM
+Int. Conf. on Automated Software Engineering (ASE)}, 2024.
 
 \bibitem{page1999pagerank}
 L.~Page, S.~Brin, R.~Motwani, and T.~Winograd, ``The PageRank citation ranking:

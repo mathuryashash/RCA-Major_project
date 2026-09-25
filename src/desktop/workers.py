@@ -68,6 +68,11 @@ class InferenceWorker(QThread):
     progress = Signal(int, str)
     finished_ok = Signal(object)
     failed = Signal(str)
+    # A quiet window is a real, successful result -- not an error. Routing it
+    # through `failed` made the UI print "Failed: No anomalies were detected",
+    # which contradicts the project's own honesty claim ("it says so rather
+    # than guessing"): a correct null result should never read as a failure.
+    empty = Signal(str)
 
     def __init__(self, hours: int, max_granger_lag: int, start=None, end=None,
                  trigger: str = "manual", parent=None):
@@ -92,7 +97,7 @@ class InferenceWorker(QThread):
                 progress=self.progress.emit,
             )
             if not payload["active_anomalies"]:
-                self.failed.emit("No anomalies were detected in this observed window.")
+                self.empty.emit("No anomalies were detected in this observed window.")
                 return
             self.progress.emit(95, "Generating the report …")
             payload["causal_results"]["process_attribution"] = payload["process_attribution"]

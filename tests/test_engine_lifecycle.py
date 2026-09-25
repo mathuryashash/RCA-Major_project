@@ -344,7 +344,7 @@ def test_detect_incidents_hides_windows_rca_cannot_analyse(tmp_path, monkeypatch
         "provider": ["Microsoft-Windows-Kernel-Power"] * 2,
         "level": [1, 1],
     })
-    monkeypatch.setattr(engine, "load_events", lambda p: events)
+    monkeypatch.setattr(engine, "load_events", lambda p, start_ts=None, end_ts=None: events)
     # No model, so the detector path is skipped and the default window applies.
     monkeypatch.setattr(engine, "model_status", lambda p: engine.ModelStatus(exists=False))
 
@@ -375,7 +375,7 @@ def test_short_detector_incidents_are_offered_not_dropped(tmp_path, monkeypatch)
         lambda p: (_StubDetector(flags), _ScalerPassthrough(), ["cpu_pct"]),
     )
     monkeypatch.setattr(engine, "model_status", lambda p: engine.ModelStatus(exists=True))
-    monkeypatch.setattr(engine, "load_events", lambda p: pd.DataFrame())
+    monkeypatch.setattr(engine, "load_events", lambda p, start_ts=None, end_ts=None: pd.DataFrame())
 
     incidents = engine.detect_incidents(path, tmp_path / "m.pt", lookback_hours=24 * 365,
                                         min_consecutive=3)

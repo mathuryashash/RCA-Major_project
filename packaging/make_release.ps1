@@ -60,6 +60,13 @@ release came from
 https://github.com/mathuryashash/RCA-Major_project/releases
 before choosing Run anyway.
 
+Optional: run packaging\sign.ps1 before packaging to code-sign both
+executables. A self-signed certificate (the default) proves the two .exe
+files were not modified after signing; it does not remove the SmartScreen
+prompt above, since that requires a certificate from a CA in Microsoft's
+trusted root program. Pass -PfxPath to sign.ps1 with such a certificate to
+clear SmartScreen once it has built install reputation.
+
 Nothing is collected until you agree on first launch, and nothing is ever
 uploaded: the application makes no network connections.
 "@ | Set-Content "$staging\START-HERE.txt" -Encoding utf8

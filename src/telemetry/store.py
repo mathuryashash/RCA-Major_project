@@ -155,6 +155,17 @@ def connect(path: Path | str) -> sqlite3.Connection:
         if not is_corruption(error):
             raise                      # locked, read-only, no such directory
         if quarantine(path) is None:
+            # Either the file could not be moved aside, or -- the common case
+            # under two-process contention -- a sibling process already won
+            # this race and quarantined it first, leaving a fresh file in its
+            # place. Distinguish those: a fresh file at `path` means recovery
+            # already happened elsewhere, so open it instead of crashing the
+            # loser of the race.
+            if path.exists():
+                try:
+                    return _open(path)
+                except sqlite3.Error:
+                    pass
             raise
         return _open(path)
 
@@ -202,7 +213,17 @@ def _add_missing_sample_columns(conn: sqlite3.Connection) -> list[str]:
     added = []
     for column, sql_type in SAMPLE_COLUMN_TYPES.items():
         if column not in existing:
-            conn.execute(f"ALTER TABLE samples ADD COLUMN {column} {sql_type}")
+            try:
+                conn.execute(f"ALTER TABLE samples ADD COLUMN {column} {sql_type}")
+            except sqlite3.OperationalError as error:
+                # Two processes can both see the column missing and both
+                # issue the ALTER at startup; the loser of that race gets
+                # "duplicate column name" back, not damage -- the column is
+                # already there. Anything else is a real schema problem and
+                # still needs to surface.
+                if "duplicate column name" not in str(error).lower():
+                    raise
+                continue
             added.append(column)
     return added
 

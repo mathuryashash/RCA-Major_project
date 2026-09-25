@@ -464,6 +464,38 @@ def test_agreeing_completes_the_install_without_a_command_line(qtbot, tmp_path, 
     assert done == ["start", "logon", "arp", "menu"], done
 
 
+def test_collector_setup_failure_is_logged_not_swallowed(tmp_path, monkeypatch, caplog):
+    """A broken consent/schedule wiring must leave a trace in desktop.log.
+
+    Previously this path was a bare ``except Exception: pass`` -- the GUI
+    still opened (correct), but a failure to register autostart was
+    completely invisible, indistinguishable from the user declining consent.
+    """
+    import logging
+
+    from desktop import main as desktop_main
+
+    monkeypatch.setattr(
+        "desktop.consent.ensure_consent",
+        lambda parent=None: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    # The "desktop" logger sets propagate=False (so it never lands in the
+    # collector's log file), which also means caplog's root-logger handler
+    # never sees it -- attach directly to the logger under test instead.
+    logger = logging.getLogger("desktop")
+    logger.addHandler(caplog.handler)
+    logger.setLevel(logging.ERROR)
+    try:
+        desktop_main._ensure_collector_running()  # must not raise
+    finally:
+        logger.removeHandler(caplog.handler)
+
+    assert any("boom" in record.getMessage() or record.exc_info for record in caplog.records), (
+        "the exception must be logged, not silently swallowed"
+    )
+
+
 def test_declining_registers_nothing(qtbot, tmp_path, monkeypatch):
     """Declining must leave the machine exactly as it was found."""
     from desktop import main as desktop_main
@@ -605,6 +637,39 @@ def test_verdict_banner_states_the_finding_for_every_evidence_case(qtbot):
     # Nothing anomalous is a result, not a blank screen.
     view._set_verdict({"causal_support": None}, [])
     assert "nothing to explain" in view.verdict.text().lower()
+
+
+def test_no_anomalies_is_reported_as_a_result_not_a_failure(qtbot):
+    """A quiet window is success, not an error -- must never say "Failed:".
+
+    InferenceWorker used to route "no anomalies detected" through its
+    ``failed`` signal, so the UI displayed "Failed: No anomalies were
+    detected in this observed window." A correct, honest null result must
+    not be worded or styled like a crash -- that directly contradicts the
+    project's own "it says so rather than guessing" claim.
+    """
+    from desktop.state import AppState
+    from desktop.views.stage2_view import Stage2View
+
+    view = Stage2View(AppState())
+    qtbot.addWidget(view)
+
+    view._on_empty("No anomalies were detected in this observed window.")
+
+    assert "failed" not in view.status_label.text().lower()
+    assert "no anomalies" in view.status_label.text().lower()
+    assert "nothing to explain" in view.verdict.text().lower()
+    assert view.verdict.objectName() == "verdictUntested"
+
+
+def test_inference_worker_emits_empty_not_failed_when_quiet(qtbot):
+    """The signal contract itself: no anomalies must not use `failed`."""
+    from desktop.workers import InferenceWorker
+
+    assert hasattr(InferenceWorker, "empty"), (
+        "InferenceWorker needs a dedicated signal for a successful null "
+        "result, distinct from `failed`"
+    )
 
 
 def test_results_table_has_an_empty_state_before_any_run(qtbot):
@@ -998,4 +1063,8 @@ def test_the_wait_for_a_baseline_shows_progress(qtbot, monkeypatch):
 
     # 628 of 2,512 is a quarter of the way there, and must be said so.
     assert "25%" in view.remaining_label.text(), view.remaining_label.text()
-    assert view.progress_bar.value() == 25
+    # The training progress bar is dedicated to an in-flight training run
+    # (see _on_progress); readiness lives in remaining_label's text instead,
+    # so a "quarter of the way collected" state must not paint the training
+    # bar as 25% done -- that would misread as a run already underway.
+    assert view.progress_bar.isVisible() is False

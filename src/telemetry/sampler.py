@@ -6,6 +6,8 @@ from ctypes import wintypes
 
 import psutil
 
+from .logsetup import get_logger
+
 SAMPLE_COLUMNS = (
     "elapsed_ms", "cpu_pct", "cpu_pct_max_core", "cpu_freq_mhz", "cpu_freq_ratio",
     "mem_pct", "mem_available_mb", "swap_pct", "swap_used_bytes", "swap_used_delta",
@@ -25,13 +27,11 @@ SAMPLE_COLUMN_TYPES = {
 
 _IS_WINDOWS = hasattr(ctypes, "windll")
 
+_LOGGER = get_logger(__name__)
+
 # NVML is the only temperature source available here: psutil's
 # sensors_temperatures() returns None on Windows. It is optional -- a machine
 # with no NVIDIA GPU simply records NULL for these channels.
-from .logsetup import get_logger
-
-_LOGGER = get_logger(__name__)
-
 try:
     import pynvml
 

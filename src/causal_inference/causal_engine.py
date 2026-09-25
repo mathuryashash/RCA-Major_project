@@ -13,7 +13,7 @@ Implements:
 Follows the architecture described in PRD.md §1.1.3 and §1.1.4.
 """
 
-import numpy as np
+import logging
 import pandas as pd
 import networkx as nx
 from statsmodels.tsa.stattools import grangercausalitytests
@@ -22,6 +22,8 @@ from typing import Dict, List, Tuple, Optional
 import warnings
 
 warnings.filterwarnings("ignore")  # suppress statsmodels verbose output
+
+_LOGGER = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -129,8 +131,20 @@ class GrangerAnalyzer:
                         "strength":    round(effect_size, 6),
                     }
 
-                except Exception:
-                    continue  # skip pairs with numerical issues
+                except Exception as exc:
+                    # A systemic failure here (e.g. a statsmodels API change,
+                    # a shape mismatch) must not look identical to "no
+                    # relationship" -- the report's headline honesty claim
+                    # rests on distinguishing "not tested"/"nothing found"
+                    # from "the test itself broke". Log it so a run that
+                    # silently loses every pair is visible in desktop.log
+                    # instead of just quietly becoming "no supported causal
+                    # chain".
+                    _LOGGER.warning(
+                        "Granger test failed for pair (%s -> %s): %s",
+                        cause, effect, exc,
+                    )
+                    continue  # skip this pair; still test the others
 
         # Benjamini-Hochberg controls the false-discovery rate over all
         # ordered metric pairs.  This is important because a laptop can expose
@@ -568,7 +582,7 @@ class CausalInferencePipeline:
         root_causes = self.ranker.rank(
             causal_graph, anomaly_scores, anomaly_first_seen, event_correlations
         )
-        print(f"  -> Root cause ranking complete.")
+        print("  -> Root cause ranking complete.")
 
         return {
             "granger_results":    granger_results,

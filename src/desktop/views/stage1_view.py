@@ -13,7 +13,7 @@ from pipeline import engine
 from telemetry import config
 
 
-def _slider_with_spinbox(minimum, maximum, default, layout, label):
+def _slider_with_spinbox(minimum, maximum, default, layout, label, tooltip=None):
     row = QHBoxLayout()
     slider = QSlider(Qt.Horizontal)
     slider.setRange(minimum, maximum)
@@ -25,6 +25,9 @@ def _slider_with_spinbox(minimum, maximum, default, layout, label):
     # to either control -- both are anonymous to a screen reader without this.
     slider.setAccessibleName(label)
     spin.setAccessibleName(label)
+    if tooltip:
+        slider.setToolTip(tooltip)
+        spin.setToolTip(tooltip)
     slider.valueChanged.connect(spin.setValue)
     spin.valueChanged.connect(slider.setValue)
     row.addWidget(slider, stretch=3)
@@ -67,8 +70,19 @@ class Stage1View(QWidget):
 
         params = QGroupBox("Training Parameters")
         form = QFormLayout()
-        self.epochs_spin = _slider_with_spinbox(1, 30, 5, form, "LSTM Training Epochs")
-        self.window_size_spin = _slider_with_spinbox(6, 60, 12, form, "LSTM Window Size (samples)")
+        self.epochs_spin = _slider_with_spinbox(
+            1, 30, 5, form, "LSTM Training Epochs",
+            tooltip="How many full passes the model makes over your collected "
+            "telemetry. More epochs fit the data more closely but take longer "
+            "and risk memorising noise instead of your machine's normal pattern.",
+        )
+        self.window_size_spin = _slider_with_spinbox(
+            6, 60, 12, form, "LSTM Window Size (samples)",
+            tooltip="How many consecutive 30-second samples the model looks at "
+            "together when learning what 'normal' looks like. Larger windows "
+            "catch slower-building problems but need more uninterrupted history "
+            "to train on.",
+        )
         # Both settings change how long training takes, so the cost of a choice
         # should be visible before making it rather than discovered afterwards.
         self.estimate_label = QLabel("—")
@@ -85,11 +99,20 @@ class Stage1View(QWidget):
         self.train_button.clicked.connect(self._on_train_clicked)
         layout.addWidget(self.train_button)
         self.progress_bar = QProgressBar()
+        self.progress_bar.setValue(0)
+        # Dedicated to training only now (readiness % lives in remaining_label
+        # as text) -- hidden until a run starts so an idle 0% bar doesn't sit
+        # beside "ready to train" implying something is stalled.
+        self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
         self.status_label = QLabel("")
         layout.addWidget(self.status_label)
         self.log_console = QPlainTextEdit()
         self.log_console.setReadOnly(True)
+        # Hidden until training actually produces output: an empty black box
+        # occupying a third of the tab before the button has even been
+        # clicked reads as dead space, not as "nothing has happened yet".
+        self.log_console.setVisible(False)
         layout.addWidget(self.log_console, stretch=1)
 
         self.refresh_status()
@@ -171,19 +194,16 @@ class Stage1View(QWidget):
 
         if readiness.ready:
             self.remaining_label.setText("ready to train")
-            self.progress_bar.setValue(100)
         elif readiness.hours_remaining < 24:
             self.remaining_label.setText(
                 f"{share:.0f}% collected — about {readiness.hours_remaining:.1f} "
                 f"hours to go"
             )
-            self.progress_bar.setValue(int(share))
         else:
             self.remaining_label.setText(
                 f"{share:.0f}% collected — about {readiness.days_remaining:.1f} "
                 f"days to go"
             )
-            self.progress_bar.setValue(int(share))
 
         self._total_windows = readiness.total_windows
         self._refresh_estimate()
@@ -202,6 +222,7 @@ class Stage1View(QWidget):
 
     def _on_train_clicked(self):
         self.train_button.setEnabled(False)
+        self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.state.training_epochs = self.epochs_spin.value()
         self.state.window_size = self.window_size_spin.value()
@@ -212,6 +233,7 @@ class Stage1View(QWidget):
         self.worker.start()
 
     def _on_progress(self, pct, message):
+        self.log_console.setVisible(True)
         self.progress_bar.setValue(pct)
         self.status_label.setText(message)
         self.log_console.appendPlainText(f"[{pct:3d}%] {message}")
@@ -229,6 +251,7 @@ class Stage1View(QWidget):
         self.model_trained.emit()
 
     def _on_failed(self, message):
+        self.log_console.setVisible(True)
         self.status_label.setText(f"Failed: {message}")
         self.log_console.appendPlainText(f"ERROR: {message}")
         self.worker = None
