@@ -64,63 +64,32 @@
 Ground Truth}
 
 \author{
-\IEEEauthorblockN{Yashash Mathur}
-\IEEEauthorblockA{\textit{Dept. of Information Science and Engineering} \\
-\textit{RV Institute of Technology and Management}\\
-Bengaluru, India \\
-yashashgdg@gmail.com}
-\and
-\IEEEauthorblockN{Aditya Prakash}
-\IEEEauthorblockA{\textit{Dept. of Information Science and Engineering} \\
-\textit{RV Institute of Technology and Management}\\
-Bengaluru, India}
-\and
-\IEEEauthorblockN{Utsav Upadhyay}
-\IEEEauthorblockA{\textit{Dept. of Information Science and Engineering} \\
-\textit{RV Institute of Technology and Management}\\
-Bengaluru, India}
-\and
-\IEEEauthorblockN{Shresth Modi}
-\IEEEauthorblockA{\textit{Dept. of Information Science and Engineering} \\
-\textit{RV Institute of Technology and Management}\\
-Bengaluru, India}
-\and
-\IEEEauthorblockN{Dr. Niharika P Kumar}
-\IEEEauthorblockA{\textit{Associate Professor, Dept. of ISE} \\
-\textit{RV Institute of Technology and Management}\\
-Bengaluru, India}
+\IEEEauthorblockN{Yashash Mathur, Aditya Prakash, Utsav Upadhyay, Shresth Modi,
+and Niharika P. Kumar}
+\IEEEauthorblockA{Dept. of Information Science and Engineering, RV Institute of
+Technology and Management, Bengaluru, India\\
+\texttt{\{yashashmathur2005, adityaprakash7890, uupadhyay1818,}\\
+\texttt{meshrsth10, niharikaresearch7\}@gmail.com}}
 }
 
 \maketitle
 
 \begin{abstract}
-Post-hoc diagnosis of a personal or workstation-class machine is poorly served
-by existing tooling: cloud observability stacks assume a fleet, a network path
-and a willingness to export telemetry, while the Windows Event Log records
-that a fault occurred but rarely why. We present LocalRCA, a desktop system
-that records system telemetry on a single machine, learns that machine's
-normal behaviour with an LSTM autoencoder, and attempts to explain incidents
-using Granger causality constrained by false-discovery-rate correction, an
-effect-size floor and a subsystem topology prior. The system runs entirely on
-the endpoint; the collector opens no sockets, and the only network capability
-is an opt-in, off-by-default check for a newer release that transmits nothing. Because a personal machine
-offers no labelled incidents, we evaluate in two ways: seven controlled fault
-injections, which supply ground truth by construction, and a population survey
-that replays the pipeline over 596 incidents discovered in real collected
-history. The system detects and correctly attributes injected CPU, disk and
-memory faults, and in one case produced a correct causal explanation of a
-fault it was never told about, with six surviving edges oriented away from the
-injected cause. Across real history it produces a supported causal chain for
-$106$ of $596$ incidents ($17.8\%$), with $36\%$ falling below the Granger
-sample floor and therefore untestable at the default lag. We further show that
-the hand-written subsystem prior rejects $22.7\%$ of statistically accepted
-pairs and forbids mechanisms that demonstrably exist. Deploying the system to
-non-specialist users imposed two further requirements, which we describe with
-their limits: the learned model is encrypted at rest under the user's Windows
-credentials, and the interface leads with one plain-language verdict per
-screen while keeping every raw measurement one switch away. We argue that the
-most useful property of such a system is its willingness to report that it
-cannot explain an incident, and we quantify how often that occurs.
+Diagnosing why a single Windows machine slowed down or failed is poorly served
+by fleet observability tools, which assume a network, a backend and consent to
+export telemetry. We present LocalRCA, a desktop system that records telemetry
+without sending any of it off the machine, learns that machine's normal
+behaviour with an LSTM autoencoder, and explains anomalies with Granger
+causality constrained by false-discovery-rate control, an effect-size floor and
+a subsystem topology prior. A personal machine has no labelled incidents, so we
+evaluate with seven controlled fault injections and a replay over 596 incidents
+found in real collected history. The system detects and correctly attributes
+injected CPU, disk and memory faults, and in one case explained a fault it was
+never told about. On real history it produces a supported causal chain for
+$106$ of $596$ incidents ($17.8\%$); $36\%$ are too short to test. The
+hand-written subsystem prior rejects $22.7\%$ of statistically accepted pairs,
+including mechanisms that demonstrably exist. We argue that the most useful
+property of such a tool is saying when it cannot explain an incident.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -135,26 +104,26 @@ endpoint telemetry, false discovery rate, explainability
 Diagnosing why a personal computer became slow, stalled or crashed is
 typically a manual exercise: an engineer lines up resource graphs against the
 Windows Event Log and guesses. Fleet-oriented observability platforms automate
-this, but assume infrastructure a single machine does not have---a collector
-network, a time-series backend, and consent to export telemetry describing
-which applications a person runs.
+this, but they assume infrastructure a single machine does not have: a
+collector network, a time-series backend, and the user's consent to export
+telemetry that shows which applications they run.
 
-Three constraints follow from targeting a single endpoint, and they shape the
-entire design.
+Targeting a single endpoint imposes three constraints, and most of the design
+follows from them.
 
-\textbf{No egress.} Telemetry describing application usage is sensitive. The
-system is built so that nothing is transmitted; the privacy property is
-structural, enforced by the absence of network code, rather than by policy.
+\textbf{No egress.} Telemetry about application usage is sensitive, so the
+system transmits nothing. The collector contains no network code, which means
+privacy does not depend on a setting that someone could change.
 
 \textbf{No ground truth.} A personal machine has no labelled incidents. The
 model cannot be trained to recognise known faults and cannot be evaluated
-against a labelled test set. This is the most consequential constraint, and
-Section~\ref{sec:eval} describes the only workable response we found:
-manufacture ground truth by causing faults deliberately.
+against a labelled test set. This constraint shaped the evaluation more than
+any other. The only workable response we found was to manufacture ground truth
+by causing faults on purpose (Section~\ref{sec:eval}).
 
-\textbf{Cold start is unavoidable.} ``Normal'' must be learned from the machine
-itself, so the tool is useless until it has observed enough normal behaviour---
-approximately 21 hours of clean collection in our configuration.
+\textbf{Cold start is unavoidable.} ``Normal'' has to be learned from the
+machine itself, so the tool can do nothing until it has seen enough normal
+behaviour. In our configuration that takes about 21 hours of clean collection.
 
 Our contributions are:
 
@@ -168,26 +137,47 @@ Our contributions are:
   \item A population-scale measurement of how often the causal layer produces
         an answer at all, replacing claims previously resting on single runs
         (Section~\ref{sec:population}).
-  \item An audit showing that the hand-written subsystem prior---not the
-        statistical gates---is the largest single filter in the pipeline, and
+  \item An audit showing that the hand-written subsystem prior removes more
+        statistically accepted pairs than any later stage of the pipeline, and
         that it forbids physically real mechanisms
         (Section~\ref{sec:topology}).
-  \item A deployment design for a tool that holds sensitive telemetry---
-        per-user encryption of the learned model, signed binaries, and an
-        interface that separates the verdict from the evidence---together with
-        the places it falls short (Section~\ref{sec:deploy}).
+  \item A deployment design for a tool that holds sensitive telemetry
+        (per-user encryption of the learned model, signed binaries, and an
+        interface that separates the verdict from the evidence), including
+        where it falls short (Section~\ref{sec:deploy}).
 \end{enumerate}
 
 %==============================================================================
 \section{Related Work}
 %==============================================================================
 
-\textbf{Anomaly detection in multivariate time series.} Reconstruction-based
-detectors using LSTM autoencoders are a standard approach when labelled
-anomalies are unavailable~\cite{malhotra2016lstm, hundman2018detecting}.
-Training on nominal data only, and thresholding reconstruction error, avoids
-requiring labelled faults---which is precisely the constraint an endpoint
-imposes.
+\textbf{Anomaly detection in multivariate time series.} Surveys of the
+field~\cite{chandola2009survey, blazquez2021review} separate detectors by
+whether labels exist and by whether the anomaly is a point, a subsequence or a
+whole series. Reconstruction-based detectors built on LSTMs~\cite{hochreiter1997lstm}
+are a standard approach when labelled anomalies are
+unavailable~\cite{malhotra2016lstm, hundman2018detecting}. They train on
+normal data only and threshold the reconstruction error, so they need no
+labelled faults, which an endpoint does not have. Later detectors improve
+accuracy with stochastic recurrent models
+(OmniAnomaly~\cite{su2019omni}), adversarially trained autoencoders
+(USAD~\cite{audibert2020usad}), signature matrices fed to convolutional LSTMs
+(MSCRED~\cite{zhang2019mscred}), learned sensor graphs with attention
+(GDN~\cite{deng2021gdn}) and transformers (TranAD~\cite{tuli2022tranad}).
+MSCRED and GDN also point to the sensors responsible for an anomaly; none of
+them says why those sensors moved. We keep the plain LSTM autoencoder because
+its per-metric reconstruction error maps directly onto the metric to be
+explained and it trains on a commodity CPU. Whether the heavier detectors
+would pay for themselves on a single endpoint is not tested here.
+
+\textbf{Log-based anomaly detection.} System logs are the other common
+signal. Xu et al.~\cite{xu2009console} applied PCA to message-count vectors
+mined from console logs, He et al.~\cite{he2016experience} benchmarked six
+supervised and unsupervised log detectors, and DeepLog~\cite{du2017deeplog}
+learns log-key sequences with an LSTM and flags keys it did not predict. On a
+personal machine the Windows Event Log is sparse (our host logged
+$6{,}600$ allow-listed records in 59 days), so LocalRCA uses it only as
+context around a metric anomaly and not as a detector.
 
 \textbf{Causal discovery from observational data.} Granger
 causality~\cite{granger1969investigating} tests whether one series improves
@@ -196,14 +186,32 @@ under a temporal constraint rather than interventional, and is well known to
 over-report on correlated series without correction. We apply
 Benjamini--Hochberg false-discovery-rate control~\cite{benjamini1995controlling}
 across the full set of ordered pairs, an effect-size floor, and a domain prior
-over subsystems.
+over subsystems. Nonlinear extensions replace the linear autoregression with
+neural networks whose sparse input weights identify Granger
+causes~\cite{tank2022neural}, and PCMCI~\cite{runge2019pcmci} conditions on
+each series' own past and a selected parent set to suppress false links caused
+by autocorrelation. Both need longer series than an incident window usually
+provides: Section~\ref{sec:population} shows that $36\%$ of real incidents are
+too short even for the linear test.
 
 \textbf{Root cause analysis in distributed systems.} Microservice RCA work
 typically exploits service call graphs or distributed traces to constrain
-candidate causes~\cite{kim2013root, chen2014causeinfer}. No such topology
-exists on a single endpoint, which motivates our explicit, inspectable
-subsystem map---and, as Section~\ref{sec:topology} shows, makes the quality of
-that map a first-order concern.
+candidate causes~\cite{kim2013root, chen2014causeinfer}, and Soldani and
+Brogi~\cite{soldani2022survey} survey anomaly detection and root cause analysis
+across service-based cloud applications. A common pattern is to build a
+dependency graph and walk it. CloudRanger~\cite{wang2018cloudranger} learns a
+causal graph with the PC algorithm and ranks candidates by a second-order
+random walk; AutoMAP~\cite{ma2020automap} builds behaviour graphs over several
+metrics; MicroRCA~\cite{wu2020microrca} runs personalised PageRank over an
+attributed service--host graph; and MicroCause~\cite{meng2020microcause} pairs
+a PCMCI-derived causal graph with a temporal cause-oriented random walk.
+CIRCA~\cite{li2022circa} derives a structural graph from the system
+architecture and treats root-cause identification as recognising which
+variable was intervened on, while BARO~\cite{pham2024baro} avoids a graph and
+scores metrics with multivariate Bayesian online change-point detection. A
+single endpoint has no service topology, so we write an explicit subsystem map
+by hand, and Section~\ref{sec:topology} shows how much the quality of that map
+then matters.
 
 \textbf{Benchmarked causal RCA at fleet scale.} Recent work evaluates causal
 discovery for root cause analysis at a scale this system does not attempt.
@@ -215,22 +223,21 @@ microservice architectures and find that none dominates uniformly, that
 performance is highly sensitive to the underlying call graph, and that
 published recall numbers do not transfer cleanly between systems. Both
 works assume a call graph or trace corpus that a single endpoint does not
-have; the corresponding gap here is that our $596$-incident survey has no
-comparable ground truth, so Section~\ref{sec:population} reports how often
-the system speaks, not how often it is correct against a labelled corpus.
+have. Our $596$-incident survey also lacks comparable ground truth, so
+Section~\ref{sec:population} reports how often the system gives an answer,
+not how often that answer is correct.
 
-\textbf{Positioning.} The distinguishing constraints of this work are the
-single-machine scope, the absence of ground truth, and a deliberate design
-commitment to reporting uncertainty rather than producing a ranking regardless
-of evidence.
+\textbf{Positioning.} This work differs from the above in that it runs on one
+machine, has no ground truth to learn from, and is designed to report
+uncertainty instead of producing a ranking whatever the evidence.
 
 %==============================================================================
 \section{System Architecture}
 %==============================================================================
 
-The system comprises two processes sharing a SQLite database
-(Fig.~\ref{fig:arch}). The separation exists because collection must survive
-the user interface being closed.
+The system is two processes that share a SQLite database
+(Fig.~\ref{fig:arch}). They are separate because collection has to keep
+running after the user closes the interface.
 
 \begin{figure}[t]
 \centering
@@ -259,8 +266,8 @@ The collector samples 29 features every 30 seconds, the top processes by CPU
 and resident memory every 300 seconds (tightening to 30 seconds under load),
 and an allow-listed subset of Windows Event Log records. Retention is
 tiered by sensitivity: numeric readings for 365 days, per-process detail for
-30 days, and the foreground application name---the most personal field
-collected---for 30 days.
+30 days, and the foreground application name, the most personal field
+collected, for 30 days.
 
 At the time of writing the evaluation host had accumulated $124{,}674$ system
 samples, $1{,}835{,}250$ process samples and $6{,}600$ Event Log records over
@@ -319,19 +326,19 @@ $p$-value is selected. A pair is skipped unless
 N \;\ge\; 3L + 2 ,
 \label{eq:floor}
 \end{equation}
-which at the default $L=5$ requires 17 aligned samples. Equation~\eqref{eq:floor}
-explains the majority of this system's negative results.
+which at the default $L=5$ requires 17 aligned samples. Most of this
+system's negative results come from Equation~\eqref{eq:floor}.
 
 Surviving $p$-values are corrected with Benjamini--Hochberg: sorting ascending,
 the largest rank $k$ satisfying $p_{(k)} \le \alpha k / m$ is found and ranks
-$1\ldots k$ accepted, with $\alpha = 0.05$. A $p$-value alone is insufficient,
-since negligible improvements become significant given a long history, so an
-effect-size proxy is also required:
+$1\ldots k$ accepted, with $\alpha = 0.05$. A $p$-value alone is not enough,
+because with a long history even a negligible improvement becomes significant,
+so we also require an effect-size proxy:
 \begin{equation}
 \mathrm{effect} = \frac{F}{F+N} \;\ge\; 0.10 .
 \end{equation}
-This quantity is monotone in $F$, bounded in $(0,1)$, and shrinks as $N$ grows
---- which is the correction desired, since large $N$ is what made the $p$-value
+This quantity is monotone in $F$, lies in $(0,1)$, and shrinks as $N$ grows.
+That is the correction we want, since a large $N$ is what made the $p$-value
 small.
 
 Accepted pairs form a directed graph; cycles are removed preferring edges that
@@ -419,8 +426,8 @@ Idle             & 60 & 1/29 & --- & 3.4\% false positives \\
 
 Half the CPU cores were burned for 30 minutes with no information given to the
 pipeline. The ranking named \texttt{cpu\_pct} first at $1.000$, and the
-surviving edges are oriented \emph{away} from CPU---the signature of a genuine
-root cause, since nothing upstream drives it:
+surviving edges point \emph{away} from CPU. That is what a real root cause
+should look like, since nothing upstream drives it:
 \[
 \texttt{cpu\_pct\_max\_core} 
 \rightarrow \texttt{disk\_busy\_pct}
@@ -429,33 +436,33 @@ root cause, since nothing upstream drives it:
 (\text{lag } 2,\ 0.756).
 \]
 
-\subsection{Starvation, not failure}
+\subsection{Short windows starve the causal layer}
 
 The same fault at 7 and at 30 minutes differed only in duration. At 14 samples,
 against the floor of 17 from~\eqref{eq:floor}, \emph{no pair was compared at
 all}, and the system reported exactly that. At 60 samples, ten pairs survived
-correction and six survived the topology filter. The causal layer was not
-broken; it was starved. This distinction changes the remedy from redesign to
-window width, and is confirmed at scale in Section~\ref{sec:population}.
+correction and six survived the topology filter. The causal layer worked;
+it was short of samples, so the fix is a wider window rather than a redesign.
+Section~\ref{sec:population} confirms this at scale.
 
 \subsection{A defect that injection exposed}
 
 The memory injection detected the anomaly and then attributed it to four
 unrelated processes. Attribution ranked candidates by mean CPU, while resident
-memory was selected but never sorted on---so a process that allocates and
-sleeps could never be named. A memory-bound cause was unreportable
-\emph{by construction}, in every incident the system had ever analysed. The
-CPU and disk faults are both CPU-heavy and had attributed correctly by
-accident of their shape, concealing the defect.
+memory was selected but never sorted on, so a process that allocates memory
+and then sleeps could never be named. A memory-bound cause was unreportable
+\emph{by construction} in every incident the system had ever analysed. The CPU
+and disk faults are both CPU-heavy, so they happened to be attributed
+correctly, and that hid the defect.
 
 \subsection{A measurement this host cannot provide}
 
 A later memory injection on a deliberately cleared machine flagged nothing.
 The detector was correct: the host's median memory utilisation across 30{,}199
-samples is $95.2\%$, and the injection window sat at $87.4\%$---the 9th
-percentile of its own history. The injection is bounded to half of free memory
-for safety, which on a habitually-full host cannot exceed the level the machine
-already reaches unaided. The fault is undetectable \emph{by construction} here,
+samples is $95.2\%$, and the injection window sat at $87.4\%$, the 9th
+percentile of the host's own history. For safety the injection is limited to
+half of free memory, and on a host that is usually full that cannot push usage
+above the level the machine already reaches on its own. The fault is undetectable \emph{by construction} here,
 and the harness now reports this as inconclusive rather than as a detector
 failure.
 
@@ -466,7 +473,7 @@ failure.
 
 Fault injection establishes correctness on a handful of cases but yields single
 observations. To measure \emph{frequency}, the pipeline was replayed over every
-incident discoverable in real collected history---no injection, read-only.
+incident found in real collected history, read-only and with no injection.
 
 \begin{figure}[t]
 \centering
@@ -490,9 +497,8 @@ incident discoverable in real collected history---no injection, read-only.
 \end{axis}
 \end{tikzpicture}}
 \caption{Causal yield against window length, over 381 analysable incidents
-($L=5$, 30-day survey). The rate rises monotonically with window length,
-confirming at scale the starvation effect first seen in a single pair of
-injections.}
+($L=5$, 30-day survey). The rate rises steadily with window length, which
+is the short-window effect first seen in a pair of injections, now at scale.}
 \label{fig:yield}
 \end{figure}
 
@@ -502,20 +508,21 @@ $106$ produce a supported causal chain. The end-to-end figure a user experiences
 is therefore $106/596 = 17.8\%$: roughly one incident in six receives a causal
 explanation.
 
-We report the funnel rather than the survivor-filtered rate. The share of
-\emph{analysable} incidents explained is $27.8\%$, which is the more flattering
-number and describes fewer situations.
+We report the whole funnel. Counting only \emph{analysable} incidents would
+give $27.8\%$, which looks better but describes fewer situations.
 
 \textbf{The floor is a parameter artefact.} Short incidents are widened before
 analysis to exactly the model's window size, 15 samples, while~\eqref{eq:floor}
-at $L=5$ requires 17---two constants chosen independently in the same pipeline.
+at $L=5$ requires 17. The two constants were chosen independently in the same
+pipeline.
 Re-running the survey at $L\in\{3,4,5\}$ over an identical population (598
 incidents discovered over 30 days of real collected history) confirms the
 cliff disappears at $L\le3$: 0 incidents fall below the floor, versus 215 at
 $L=5$. Explanations rise only modestly, from $106$ to $110$, while the tested
 population nearly triples (381 to 598), and median surviving edges holds at
-$2$ throughout. The gain is honest reporting---``tested, nothing
-found'' instead of ``not tested''---rather than insight.
+$2$ throughout. What improves is the reporting: more incidents read
+``tested, nothing found'' instead of ``not tested'', but few gain an
+explanation.
 
 %==============================================================================
 \section{Auditing the Subsystem Prior}
@@ -564,8 +571,8 @@ real third case.}
 Every rejected transition has \emph{zero} survivors, because the map forbids
 whole classes rather than individual edges (Fig.~\ref{fig:topology}). Judged
 individually, \texttt{disk}\,$\rightarrow$\,\texttt{memory} is almost certainly
-real---the Windows standby file cache expanding under write pressure---and is
-the strongest single rejected relationship measured in this run, at $0.654$
+real (the Windows standby file cache grows under write pressure) and is the
+strongest single rejected relationship measured in this run, at $0.654$
 (\texttt{disk\_write\_bps}$\rightarrow$\texttt{swap\_used\_delta}, lag 2).
 \texttt{disk}\,$\rightarrow$\,\texttt{cpu}
 reflects interrupt and DPC handling, and \texttt{network}\,$\rightarrow$\,
@@ -576,11 +583,11 @@ Conversely, the smallest rejected classes
 \texttt{disk}$\rightarrow$\texttt{process}, at 1--2 occurrences each) are
 plausibly spurious rather than real mechanisms being wrongly forbidden.
 
-The prior is therefore not so much wrong as \emph{one-directional}: it models
-resource pressure flowing downhill and has no vocabulary for the feedback that
-makes I/O expensive. Adding the reverse edges would make the graph cyclic,
-where cycle-breaking already removes $14.7\%$ of pairs---so the two mechanisms
-would begin to compete. We record this as an open design question rather than
+The problem with the prior is that it only runs one way. It models resource
+pressure flowing downhill and cannot express the feedback that makes I/O
+expensive. Adding the reverse edges would make the graph cyclic, and
+cycle-breaking already removes $14.7\%$ of pairs, so the two mechanisms would
+start to compete. We leave this as an open design question instead of
 patching it.
 
 %==============================================================================
@@ -588,15 +595,16 @@ patching it.
 \label{sec:deploy}
 %==============================================================================
 
-A research prototype can leave its data in plaintext and its results as raw
-tables. A tool installed by someone else, holding a record of when and how
-their machine is used, cannot. This section describes what the released
-application (v1.5.1) does about both, and where it falls short.
+A research prototype can leave its data in plaintext and show its results as
+raw tables. A tool that someone else installs, and that records when and how
+they use their machine, should not. This section describes what the released
+application (v1.5.1) does about both problems and where it falls short.
 
 \subsection{Protecting the model at rest}
 
 The trained artefact holds the scaler's per-metric bounds and the per-metric
-thresholds---a compact statistical profile of how the machine is used. It is
+thresholds, which together form a compact statistical profile of how the
+machine is used. It is
 wrapped with the Windows Data Protection API (DPAPI), which binds the
 ciphertext to the user's logon credentials, so a copy taken to another account
 or machine cannot be read. The write is atomic, via a temporary file and a
@@ -614,7 +622,7 @@ its 227\,MB database remains in plaintext, protected only by file-system
 permissions. The failure is logged rather than silent, but the protection a
 user receives depends on which edition of Windows they bought. Second,
 re-encryption happens only on retraining, so the model on the evaluation
-host---trained before encryption was added---is still the plaintext artefact.
+host, which was trained before encryption was added, is still in plaintext.
 Third, independent review of the encryption change found that training wrote
 an intermediate checkpoint in plaintext and deleted it only on success; an
 interrupted run left unencrypted weights on disk. The checkpoint is now
@@ -639,9 +647,9 @@ current run, time remaining) that a non-specialist had to reconcile alone.
 Hiding these would contradict the project's premise, since a user cannot
 consent meaningfully to collection they cannot inspect.
 
-The released interface therefore has two presentations of identical
-computation, selected by a single global switch that persists across sessions
-and is off by default. In the default view each tab leads with one sentence
+The released interface therefore presents the same computation in two ways,
+selected by a single global switch that persists across sessions and is off by
+default. In the default view each tab leads with one sentence
 whose colour encodes state: the data tab reports \emph{Healthy} only when
 coverage is at least $90\%$ with at most three breaks, and \emph{Partial data}
 from $50\%$; the training tab states whether a model can be trained and, if
@@ -651,8 +659,8 @@ restores the raw counts, the channel table, the database path, the training
 hyperparameters, the Granger lag, and the score and outflow columns. Nothing is
 computed differently in either view; the switch changes presentation only, and
 the headline sentence is derived from the same coverage figures the advanced
-view prints. The evaluation host itself reads \emph{Partial data} at $73\%$
-coverage---accurate, if unflattering.
+view prints. The evaluation host itself shows \emph{Partial data} at $73\%$
+coverage, which is correct.
 
 This design was checked by one expert review and by driving the live
 application. It has not been measured with users, and whether the default view
@@ -662,15 +670,14 @@ helps a non-specialist reach a correct conclusion is unestablished.
 \section{Discussion and Threats to Validity}
 %==============================================================================
 
-\textbf{All measurements come from one machine.} Nothing here establishes
-generality, and one measurement---memory-fault detection---is provably
-unobtainable on this host, which makes second hardware a prerequisite rather
-than an enhancement.
+\textbf{All measurements come from one machine.} Nothing here shows that the
+results generalise. One measurement, memory-fault detection, cannot be made on
+this host at all, so testing on a second machine is required, not optional.
 
 \textbf{Correctness is not established at population scale.} The survey's 596
-incidents have no known cause, so a $17.8\%$ explanation rate reports how often
-the layer speaks, never whether it is right. The rate is a ceiling on
-usefulness, not a measure of accuracy.
+incidents have no known cause, so the $17.8\%$ explanation rate says how often
+the causal layer gives an answer, not whether the answer is right. It is an
+upper bound on usefulness rather than a measure of accuracy.
 
 \textbf{No fault has been tested whose cause is not also the loudest metric.}
 Both explaining runs put the injected fault atop a severity ranking, so a
@@ -682,16 +689,16 @@ suppress the resulting over-reporting, and Section~\ref{sec:topology} shows the
 prior itself is imperfect.
 
 \textbf{A methodological observation.} Nine defects were found in code carrying
-a passing test suite of 130 tests. In nearly every case the test asked a
-question \emph{adjacent} to the one that mattered---a database value instead of
-the bytes on disk, one file instead of the full storage footprint, a function
-instead of the code path calling it. Two fixes were worse than the defects they
+a passing test suite of 130 tests. In nearly every case the test checked
+something next to what mattered: a database value instead of the bytes on
+disk, one file instead of the full storage footprint, or a function instead
+of the code path that calls it. Two fixes were worse than the defects they
 repaired. These were caught by adversarial review rather than additional
 testing, which we believe generalises beyond this system. The pattern recurred
 once encryption was added: two reviewers independently found the plaintext
 training checkpoint of Section~\ref{sec:deploy} in code whose tests all
-passed, because the tests exercised only the successful path. The suite now
-stands at 150 tests.
+passed, because the tests exercised only the successful path. The suite has
+since grown to 195 tests.
 
 %==============================================================================
 \section{Conclusion}
@@ -707,9 +714,9 @@ survived''.
 
 We argue this last property matters more than the explanation rate. A tool
 reporting ``no causal chain was supported'' when the data cannot support one is
-more useful than a confident ranking that changes with the analysis window---and
-in this system, the engineering required to make it say so honestly exceeded
-the engineering required to compute an answer at all.
+more useful than a confident ranking that changes with the analysis window.
+In this system, getting it to say so honestly took more engineering than
+computing an answer did.
 
 Future work: repeating the evaluation on second hardware, testing a fault whose
 cause is not the loudest metric, resolving whether the subsystem prior should
@@ -721,6 +728,19 @@ conclusions.
 %==============================================================================
 \begin{thebibliography}{00}
 
+\bibitem{chandola2009survey}
+V.~Chandola, A.~Banerjee, and V.~Kumar, ``Anomaly detection: A survey,''
+\emph{ACM Comput. Surv.}, vol.~41, no.~3, pp. 1--58, 2009.
+
+\bibitem{blazquez2021review}
+A.~Bl\'{a}zquez-Garc\'{i}a, A.~Conde, U.~Mori, and J.~A. Lozano, ``A review on
+outlier/anomaly detection in time series data,'' \emph{ACM Comput. Surv.},
+vol.~54, no.~3, pp. 1--33, 2021.
+
+\bibitem{hochreiter1997lstm}
+S.~Hochreiter and J.~Schmidhuber, ``Long short-term memory,'' \emph{Neural
+Comput.}, vol.~9, no.~8, pp. 1735--1780, 1997.
+
 \bibitem{malhotra2016lstm}
 P.~Malhotra, A.~Ramakrishnan, G.~Anand, L.~Vig, P.~Agarwal, and G.~Shroff,
 ``LSTM-based encoder-decoder for multi-sensor anomaly detection,'' in
@@ -730,6 +750,49 @@ P.~Malhotra, A.~Ramakrishnan, G.~Anand, L.~Vig, P.~Agarwal, and G.~Shroff,
 K.~Hundman, V.~Constantinou, C.~Laporte, I.~Colwell, and T.~Soderstrom,
 ``Detecting spacecraft anomalies using LSTMs and nonparametric dynamic
 thresholding,'' in \emph{Proc. ACM SIGKDD}, 2018, pp. 387--395.
+
+\bibitem{su2019omni}
+Y.~Su, Y.~Zhao, C.~Niu, R.~Liu, W.~Sun, and D.~Pei, ``Robust anomaly detection
+for multivariate time series through stochastic recurrent neural network,'' in
+\emph{Proc. 25th ACM SIGKDD Int. Conf. Knowl. Discovery Data Mining}, 2019,
+pp. 2828--2837.
+
+\bibitem{audibert2020usad}
+J.~Audibert, P.~Michiardi, F.~Guyard, S.~Marti, and M.~A. Zuluaga, ``USAD:
+UnSupervised anomaly detection on multivariate time series,'' in \emph{Proc.
+26th ACM SIGKDD Int. Conf. Knowl. Discovery Data Mining}, 2020,
+pp. 3395--3404.
+
+\bibitem{zhang2019mscred}
+C.~Zhang, D.~Song, Y.~Chen, X.~Feng, C.~Lumezanu, W.~Cheng, J.~Ni, B.~Zong,
+H.~Chen, and N.~V. Chawla, ``A deep neural network for unsupervised anomaly
+detection and diagnosis in multivariate time series data,'' in \emph{Proc.
+AAAI Conf. Artif. Intell.}, vol.~33, no.~1, 2019, pp. 1409--1416.
+
+\bibitem{deng2021gdn}
+A.~Deng and B.~Hooi, ``Graph neural network-based anomaly detection in
+multivariate time series,'' in \emph{Proc. AAAI Conf. Artif. Intell.},
+vol.~35, no.~5, 2021, pp. 4027--4035.
+
+\bibitem{tuli2022tranad}
+S.~Tuli, G.~Casale, and N.~R. Jennings, ``TranAD: Deep transformer networks
+for anomaly detection in multivariate time series data,'' \emph{Proc. VLDB
+Endow.}, vol.~15, no.~6, pp. 1201--1214, 2022.
+
+\bibitem{xu2009console}
+W.~Xu, L.~Huang, A.~Fox, D.~Patterson, and M.~I. Jordan, ``Detecting
+large-scale system problems by mining console logs,'' in \emph{Proc. ACM
+SIGOPS 22nd Symp. Operating Syst. Principles (SOSP)}, 2009, pp. 117--132.
+
+\bibitem{he2016experience}
+S.~He, J.~Zhu, P.~He, and M.~R. Lyu, ``Experience report: System log analysis
+for anomaly detection,'' in \emph{Proc. IEEE 27th Int. Symp. Softw. Rel. Eng.
+(ISSRE)}, 2016, pp. 207--218.
+
+\bibitem{du2017deeplog}
+M.~Du, F.~Li, G.~Zheng, and V.~Srikumar, ``DeepLog: Anomaly detection and
+diagnosis from system logs through deep learning,'' in \emph{Proc. ACM SIGSAC
+Conf. Comput. Commun. Secur. (CCS)}, 2017, pp. 1285--1298.
 
 \bibitem{granger1969investigating}
 C.~W.~J. Granger, ``Investigating causal relations by econometric models and
@@ -741,6 +804,16 @@ Y.~Benjamini and Y.~Hochberg, ``Controlling the false discovery rate: a
 practical and powerful approach to multiple testing,'' \emph{J. Roy. Statist.
 Soc. B}, vol.~57, no.~1, pp. 289--300, 1995.
 
+\bibitem{tank2022neural}
+A.~Tank, I.~Covert, N.~Foti, A.~Shojaie, and E.~B. Fox, ``Neural Granger
+causality,'' \emph{IEEE Trans. Pattern Anal. Mach. Intell.}, 2021, early
+access, doi: 10.1109/TPAMI.2021.3065601.
+
+\bibitem{runge2019pcmci}
+J.~Runge, P.~Nowack, M.~Kretschmer, S.~Flaxman, and D.~Sejdinovic, ``Detecting
+and quantifying causal associations in large nonlinear time series datasets,''
+\emph{Sci. Adv.}, vol.~5, no.~11, Art. no. eaau4996, 2019.
+
 \bibitem{kim2013root}
 M.~Kim, R.~Sumbaly, and S.~Shah, ``Root cause detection in a service-oriented
 architecture,'' in \emph{Proc. ACM SIGMETRICS}, 2013, pp. 93--104.
@@ -749,6 +822,44 @@ architecture,'' in \emph{Proc. ACM SIGMETRICS}, 2013, pp. 93--104.
 P.~Chen, Y.~Qi, P.~Zheng, and D.~Hou, ``CauseInfer: automatic and distributed
 performance diagnosis with hierarchical causality graph in large distributed
 systems,'' in \emph{Proc. IEEE INFOCOM}, 2014, pp. 1887--1895.
+
+\bibitem{soldani2022survey}
+J.~Soldani and A.~Brogi, ``Anomaly detection and failure root cause analysis
+in (micro) service-based cloud applications: A survey,'' \emph{ACM Comput.
+Surv.}, vol.~55, no.~3, pp. 1--39, 2022.
+
+\bibitem{wang2018cloudranger}
+P.~Wang, J.~Xu, M.~Ma, W.~Lin, D.~Pan, Y.~Wang, and P.~Chen, ``CloudRanger:
+Root cause identification for cloud native systems,'' in \emph{Proc. 18th
+IEEE/ACM Int. Symp. Cluster, Cloud Grid Comput. (CCGRID)}, 2018,
+pp. 492--502.
+
+\bibitem{ma2020automap}
+M.~Ma, J.~Xu, Y.~Wang, P.~Chen, Z.~Zhang, and P.~Wang, ``AutoMAP: Diagnose
+your microservice-based web applications automatically,'' in \emph{Proc. Web
+Conf. (WWW)}, 2020, pp. 246--258.
+
+\bibitem{wu2020microrca}
+L.~Wu, J.~Tordsson, E.~Elmroth, and O.~Kao, ``MicroRCA: Root cause
+localization of performance issues in microservices,'' in \emph{Proc.
+IEEE/IFIP Netw. Oper. Manage. Symp. (NOMS)}, 2020, pp. 1--9.
+
+\bibitem{meng2020microcause}
+Y.~Meng, S.~Zhang, Y.~Sun, R.~Zhang, Z.~Hu, Y.~Zhang, C.~Jia, Z.~Wang, and
+D.~Pei, ``Localizing failure root causes in a microservice through causality
+inference,'' in \emph{Proc. IEEE/ACM 28th Int. Symp. Quality of Service
+(IWQoS)}, 2020, pp. 1--10.
+
+\bibitem{li2022circa}
+M.~Li, Z.~Li, K.~Yin, X.~Nie, W.~Zhang, K.~Sui, and D.~Pei, ``Causal
+inference-based root cause analysis for online service systems with
+intervention recognition,'' in \emph{Proc. 28th ACM SIGKDD Conf. Knowl.
+Discovery Data Mining}, 2022, pp. 3230--3240.
+
+\bibitem{pham2024baro}
+L.~Pham, H.~Ha, and H.~Zhang, ``BARO: Robust root cause analysis for
+microservices via multivariate Bayesian online change point detection,''
+\emph{Proc. ACM Softw. Eng.}, vol.~1, no.~FSE, pp. 2214--2237, 2024.
 
 \bibitem{ikram2022root}
 A.~Ikram, S.~Chakraborty, S.~Mitra, S.~Saini, S.~Bagchi, and M.~Kocaoglu,
@@ -761,14 +872,14 @@ L.~Pham, H.~Ha, and H.~Zhang, ``Root cause analysis for microservice system
 based on causal inference: How far are we?'' in \emph{Proc. 39th IEEE/ACM
 Int. Conf. on Automated Software Engineering (ASE)}, 2024.
 
-\bibitem{page1999pagerank}
-L.~Page, S.~Brin, R.~Motwani, and T.~Winograd, ``The PageRank citation ranking:
-bringing order to the web,'' Stanford InfoLab, Tech. Rep. 1999-66, 1999.
-
 \bibitem{dickey1979distribution}
 D.~A. Dickey and W.~A. Fuller, ``Distribution of the estimators for
 autoregressive time series with a unit root,'' \emph{J. Amer. Statist. Assoc.},
 vol.~74, no.~366, pp. 427--431, 1979.
+
+\bibitem{page1999pagerank}
+L.~Page, S.~Brin, R.~Motwani, and T.~Winograd, ``The PageRank citation ranking:
+bringing order to the web,'' Stanford InfoLab, Tech. Rep. 1999-66, 1999.
 
 \end{thebibliography}
 
