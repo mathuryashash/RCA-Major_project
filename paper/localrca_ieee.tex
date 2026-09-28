@@ -86,7 +86,9 @@ evaluate with seven controlled fault injections and a replay over 596 incidents
 found in real collected history. The system detects and correctly attributes
 injected CPU, disk and memory faults, and in one case explained a fault it was
 never told about. On real history it produces a supported causal chain for
-$106$ of $596$ incidents ($17.8\%$); $36\%$ are too short to test. The
+$106$ of $596$ incidents ($17.8\%$, 95\% CI $14.9$--$21.1\%$); $36\%$ are
+too short to test. When it does answer, its top cause differs from the most
+anomalous metric about half the time. The
 hand-written subsystem prior rejects $22.7\%$ of statistically accepted pairs,
 including mechanisms that demonstrably exist. We argue that the most useful
 property of such a tool is saying when it cannot explain an incident.
@@ -123,7 +125,8 @@ by causing faults on purpose (Section~\ref{sec:eval}).
 
 \textbf{Cold start is unavoidable.} ``Normal'' has to be learned from the
 machine itself, so the tool can do nothing until it has seen enough normal
-behaviour. In our configuration that takes about 21 hours of clean collection.
+behaviour. In our configuration that takes about 10.5 hours of clean
+collection.
 
 Our contributions are:
 
@@ -135,7 +138,8 @@ Our contributions are:
         that has none, and a demonstration that the pipeline can identify a
         cause it was not told about (Section~\ref{sec:eval}).
   \item A population-scale measurement of how often the causal layer produces
-        an answer at all, replacing claims previously resting on single runs
+        an answer at all, replicated on a second survey, and of how often
+        that answer differs from simply naming the most anomalous metric
         (Section~\ref{sec:population}).
   \item An audit showing that the hand-written subsystem prior removes more
         statistically accepted pairs than any later stage of the pipeline, and
@@ -219,17 +223,11 @@ Ikram et al.~\cite{ikram2022root} discover root causes across thousands of
 microservice nodes and report top-$k$ recall against ground truth gathered
 from a real production incident corpus. Pham et al.~\cite{pham2024root}
 benchmark six causal-RCA methods (including CausalRCA and BARO) across
-microservice architectures and find that none dominates uniformly, that
-performance is highly sensitive to the underlying call graph, and that
-published recall numbers do not transfer cleanly between systems. Both
-works assume a call graph or trace corpus that a single endpoint does not
-have. Our $596$-incident survey also lacks comparable ground truth, so
-Section~\ref{sec:population} reports how often the system gives an answer,
-not how often that answer is correct.
-
-\textbf{Positioning.} This work differs from the above in that it runs on one
-machine, has no ground truth to learn from, and is designed to report
-uncertainty instead of producing a ranking whatever the evidence.
+microservice architectures and find that none dominates uniformly and that
+results depend heavily on the call graph. Both assume a call graph or trace
+corpus that a single endpoint does not have. Our work differs in running on
+one machine, with no ground truth, and in reporting when it cannot explain an
+incident instead of ranking whatever the evidence.
 
 %==============================================================================
 \section{System Architecture}
@@ -262,19 +260,27 @@ that a diagnostic tool should not demand.}
 \label{fig:arch}
 \end{figure}
 
-The collector samples 29 features every 30 seconds, the top processes by CPU
+The collector records 29 channels every 30 seconds, the top processes by CPU
 and resident memory every 300 seconds (tightening to 30 seconds under load),
 and an allow-listed subset of Windows Event Log records. Retention is
 tiered by sensitivity: numeric readings for 365 days, per-process detail for
 30 days, and the foreground application name, the most personal field
 collected, for 30 days.
 
-At the time of writing the evaluation host had accumulated $124{,}674$ system
+The evaluation host is a laptop with an Intel Core i7-14700HX (28 logical
+processors) and 16\,GB of RAM, running Windows 11 Home. At the time of the
+first survey it had accumulated $124{,}674$ system
 samples, $1{,}835{,}250$ process samples and $6{,}600$ Event Log records over
 59 days, occupying 227\,MB. Coverage of that span is $73.1\%$: 157 breaks in
 collection account for 383 hours not recorded. The population survey
 (Section~\ref{sec:population}) draws on the most recent 30 days of this
 history.
+
+Collection is cheap but not free. Measured over 5- and 15-minute windows,
+the collector used 14--21\% of one logical processor ($0.5$--$0.7\%$ of the
+host's capacity) with a 16\,MB working set. Across $133{,}753$ samples the
+spacing had a median of $30.0$\,s and a 99th percentile of $30.005$\,s, so
+the cost does not delay sampling.
 
 %==============================================================================
 \section{Method}
@@ -294,11 +300,15 @@ is within tolerance of the sampling cadence.
 
 \subsection{Anomaly detection}
 
-An LSTM autoencoder compresses a window of $T$ samples over $n=29$ features to
-a 32-dimensional latent vector and reconstructs it. Only the encoder's final
+An LSTM autoencoder compresses a window of $T=12$ samples (six minutes) over
+$n=17$ features to a 32-dimensional latent vector and reconstructs it. The 17
+are the numeric resource metrics the host reports; the other recorded
+channels are raw counters, GPU and idle readings, the foreground application,
+and two battery fields that are empty on this host, and are not modelled. Only the encoder's final
 hidden state reaches the bottleneck, so the entire window is represented by 32
 numbers before reconstruction; that compression is the detection mechanism.
-Training minimises
+Encoder and decoder are two-layer LSTMs with 64 hidden units and dropout
+$0.2$ ($126{,}385$ parameters). Training minimises
 \begin{equation}
 \mathcal{L} = \frac{1}{B\,T\,n}\sum_{b,t,j}\bigl(x_{btj}-\hat{x}_{btj}\bigr)^2 .
 \end{equation}
@@ -309,11 +319,18 @@ the output attributable to a metric rather than to a window:
 s_j = \frac{1}{T}\sum_{t=1}^{T}\bigl(x_{tj}-\hat{x}_{tj}\bigr)^2 .
 \end{equation}
 
-Per-metric thresholds are the 99th percentile of validation error,
+We train with Adam (learning rate $10^{-3}$, batch 32) for five epochs on
+windows taken at stride 5 within clean segments, hold out the last 20\% of
+windows in time order for validation, and keep the epoch with the lowest
+validation loss. Training starts once 250 windows exist, which is the
+10.5 hours quoted above. Per-metric thresholds are the 99th percentile of
+validation error,
 $\tau_j = P_{99}\{s_j(w)\}$, and a metric is anomalous when $s_j > \tau_j$.
 Per-metric thresholds are necessary because reconstructability varies widely:
 a near-constant channel reconstructs almost perfectly, while a bursty one does
-not, and a single global threshold would flag the latter permanently.
+not, and a single global threshold would flag the latter permanently. By
+construction about 1\% of normal windows exceed each threshold, so an
+incident needs at least three consecutive flagged samples.
 
 \subsection{Constrained causal inference}
 
@@ -402,7 +419,8 @@ samples to land at the real cadence, runs the production pipeline over the
 injection window, and scores the result.
 
 \begin{table}[t]
-\caption{Controlled fault injections, 30-minute windows unless noted}
+\caption{Controlled fault injections, 30-minute windows unless noted.
+Flagged counts are out of the 17 modelled metrics.}
 \label{tab:injection}
 \centering
 \footnotesize
@@ -411,13 +429,13 @@ injection window, and scores the result.
 \toprule
 \textbf{Fault} & \textbf{Samples} & \textbf{Flagged} & \textbf{Edges} & \textbf{Outcome} \\
 \midrule
-CPU, 7\,min      & 14 & 6/29 & --- & not tested (below floor) \\
-CPU              & 60 & 6/29 & \textbf{6} & \textbf{explained correctly} \\
-Disk             & 60 & 4/29 & 0 & detected, unexplained \\
-Memory           & 60 & 2/29 & 0 & wrong process named \\
-Memory (refixed) & 60 & 3/29 & 0 & detected, attributed \\
-Memory (clean)   & 60 & 0/29 & --- & not measurable on host \\
-Idle             & 60 & 1/29 & --- & 3.4\% false positives \\
+CPU, 7\,min      & 14 & 6/17 & --- & not tested (below floor) \\
+CPU              & 60 & 6/17 & \textbf{6} & \textbf{explained correctly} \\
+Disk             & 60 & 4/17 & 0 & detected, unexplained \\
+Memory           & 60 & 2/17 & 0 & wrong process named \\
+Memory (refixed) & 60 & 3/17 & 0 & detected, attributed \\
+Memory (clean)   & 60 & 0/17 & --- & not measurable on host \\
+Idle             & 60 & 1/17 & --- & 5.9\% false positives \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -505,15 +523,16 @@ is the short-window effect first seen in a pair of injections, now at scale.}
 Of $596$ incidents discovered, $215$ ($36\%$) fall below the sample floor of
 \eqref{eq:floor} and cannot be tested at any setting. Of the $381$ that can be,
 $106$ produce a supported causal chain. The end-to-end figure a user experiences
-is therefore $106/596 = 17.8\%$: roughly one incident in six receives a causal
-explanation.
+is therefore $106/596 = 17.8\%$ (95\% Wilson interval $14.9$--$21.1\%$):
+roughly one incident in six receives a causal explanation.
 
 We report the whole funnel. Counting only \emph{analysable} incidents would
-give $27.8\%$, which looks better but describes fewer situations.
+give $27.8\%$ ($23.6$--$32.5\%$), which looks better but describes fewer
+situations.
 
 \textbf{The floor is a parameter artefact.} Short incidents are widened before
-analysis to exactly the model's window size, 15 samples, while~\eqref{eq:floor}
-at $L=5$ requires 17. The two constants were chosen independently in the same
+analysis to exactly the model's window size, 12 samples (5.5 minutes), while
+\eqref{eq:floor} at $L=5$ requires 17. The two constants were chosen independently in the same
 pipeline.
 Re-running the survey at $L\in\{3,4,5\}$ over an identical population (598
 incidents discovered over 30 days of real collected history) confirms the
@@ -523,6 +542,23 @@ population nearly triples (381 to 598), and median surviving edges holds at
 $2$ throughout. What improves is the reporting: more incidents read
 ``tested, nothing found'' instead of ``not tested'', but few gain an
 explanation.
+
+\textbf{Replication.} Four days later we re-ran the survey at $L=5$ on the
+then most recent 30 days. The two windows share about 26 days, so this checks
+stability rather than giving an independent sample. It found $520$
+incidents, of which $177$ ($34.0\%$) fell below the floor and $94$ were
+explained ($18.1\%$, $15.0$--$21.6\%$), in line with the first run.
+
+\textbf{Does causality change the answer?} A ranking that always named the
+most anomalous metric would need no causal layer. For each of the $94$
+explained incidents we compared the top-ranked cause with the metric that had
+the largest anomaly score. They agree in $46$ ($48.9\%$, $39.1$--$58.9\%$)
+and fall in the same subsystem in $62$ ($66.0\%$). Where they differ, the
+causal ranking most often puts a disk metric ahead of a pressure symptom, for
+example \texttt{disk\_free\_pct} ahead of \texttt{swap\_used\_delta}.
+This shows the causal ranking is not severity under another name. It does not
+show the changed answer is the right one, which needs incidents with a known
+cause.
 
 %==============================================================================
 \section{Auditing the Subsystem Prior}
@@ -583,12 +619,10 @@ Conversely, the smallest rejected classes
 \texttt{disk}$\rightarrow$\texttt{process}, at 1--2 occurrences each) are
 plausibly spurious rather than real mechanisms being wrongly forbidden.
 
-The problem with the prior is that it only runs one way. It models resource
-pressure flowing downhill and cannot express the feedback that makes I/O
-expensive. Adding the reverse edges would make the graph cyclic, and
-cycle-breaking already removes $14.7\%$ of pairs, so the two mechanisms would
-start to compete. We leave this as an open design question instead of
-patching it.
+The prior only runs one way: it models pressure flowing downhill and cannot
+express the feedback that makes I/O expensive. Adding reverse edges would make
+it cyclic, and cycle-breaking already removes $14.7\%$ of pairs, so we leave
+this as an open question rather than patch it.
 
 %==============================================================================
 \section{Deployment Engineering}
@@ -598,73 +632,43 @@ patching it.
 A research prototype can leave its data in plaintext and show its results as
 raw tables. A tool that someone else installs, and that records when and how
 they use their machine, should not. This section describes what the released
-application (v1.5.1) does about both problems and where it falls short.
+application (v1.5.2) does about both problems and where it falls short.
 
 \subsection{Protecting the model at rest}
 
-The trained artefact holds the scaler's per-metric bounds and the per-metric
-thresholds, which together form a compact statistical profile of how the
-machine is used. It is
-wrapped with the Windows Data Protection API (DPAPI), which binds the
-ciphertext to the user's logon credentials, so a copy taken to another account
-or machine cannot be read. The write is atomic, via a temporary file and a
-rename, so an interrupted save cannot leave a truncated model. Artefacts from
-earlier versions carry no header, still load, and are encrypted the next time
-the model is trained. If the user's credentials are reset and the key is lost,
-the application says the model must be retrained rather than surfacing a raw
-Windows error. The database and logs, which DPAPI does not wrap, are covered by
-a second, best-effort layer: at start-up the collector asks the Encrypting
-File System (EFS) to encrypt its data folder.
-
-Three findings qualify this. First, EFS does not exist on Windows Home
-editions. The evaluation host runs one, the request fails on every start, and
-its 227\,MB database remains in plaintext, protected only by file-system
-permissions. The failure is logged rather than silent, but the protection a
-user receives depends on which edition of Windows they bought. Second,
-re-encryption happens only on retraining, so the model on the evaluation
-host, which was trained before encryption was added, is still in plaintext.
-Third, independent review of the encryption change found that training wrote
-an intermediate checkpoint in plaintext and deleted it only on success; an
-interrupted run left unencrypted weights on disk. The checkpoint is now
-removed in a \texttt{finally} block, and any leftover from an earlier crash is
-purged when training starts.
+The trained model holds per-metric bounds and thresholds, a compact profile
+of how the machine is used. It is wrapped with the Windows Data Protection
+API (DPAPI), which binds it to the user's logon, and written atomically.
+The database and logs rely on the Encrypting File System (EFS), which does
+not exist on Windows Home. The evaluation host runs Home, so its 227\,MB
+database is in plaintext, protected only by file permissions, and its model,
+trained before encryption was added, stays plaintext until retrained. Review
+also found that an interrupted training run left a plaintext checkpoint on
+disk; it is now removed in a \texttt{finally} block.
 
 \subsection{Signed binaries}
 
-Both executables are Authenticode-signed with an RFC 3161 timestamp, and each
-release publishes a SHA-256 checksum. The certificate is self-signed: it shows
-that a binary is unchanged since it was built, not who built it, so Windows
-SmartScreen still warns on first run. Removing the warning requires a
-certificate from an authority Windows trusts, which this project does not
-have.
+Both executables are Authenticode-signed and timestamped, and each release
+publishes a SHA-256 checksum. The certificate is self-signed, so it proves a
+binary is unchanged but not who built it, and Windows SmartScreen still warns
+on first run.
 
 \subsection{Separating the verdict from the evidence}
 
-A review of the running application found that the first screen presented a
-table of every captured channel with its raw latest value, and that training
-readiness was expressed four different ways (clean samples, longest run,
-current run, time remaining) that a non-specialist had to reconcile alone.
-Hiding these would contradict the project's premise, since a user cannot
-consent meaningfully to collection they cannot inspect.
+The first screen used to show every captured channel with its raw value, and
+stated training readiness four different ways. Hiding this would contradict
+the project's premise, since a user cannot consent to collection they cannot
+inspect.
 
-The released interface therefore presents the same computation in two ways,
-selected by a single global switch that persists across sessions and is off by
-default. In the default view each tab leads with one sentence
-whose colour encodes state: the data tab reports \emph{Healthy} only when
-coverage is at least $90\%$ with at most three breaks, and \emph{Partial data}
-from $50\%$; the training tab states whether a model can be trained and, if
-not, how long remains. The inference tab keeps the incident picker and opens
-on the plain-language report rather than the score table. The advanced view
-restores the raw counts, the channel table, the database path, the training
-hyperparameters, the Granger lag, and the score and outflow columns. Nothing is
-computed differently in either view; the switch changes presentation only, and
-the headline sentence is derived from the same coverage figures the advanced
-view prints. The evaluation host itself shows \emph{Partial data} at $73\%$
-coverage, which is correct.
+The released interface shows the same computation two ways, chosen by one
+switch that is off by default. The simple view opens each tab with a single
+coloured sentence (for example, \emph{Healthy} only at $\ge 90\%$ coverage
+with at most three breaks) and opens inference on the plain-language report.
+The advanced view adds the raw counts, channel table, hyperparameters, lag
+and score columns. Both views read the same figures; only presentation
+changes.
 
-This design was checked by one expert review and by driving the live
-application. It has not been measured with users, and whether the default view
-helps a non-specialist reach a correct conclusion is unestablished.
+This design has been checked by one expert review, not with users.
 
 %==============================================================================
 \section{Discussion and Threats to Validity}
@@ -677,28 +681,27 @@ this host at all, so testing on a second machine is required, not optional.
 \textbf{Correctness is not established at population scale.} The survey's 596
 incidents have no known cause, so the $17.8\%$ explanation rate says how often
 the causal layer gives an answer, not whether the answer is right. It is an
-upper bound on usefulness rather than a measure of accuracy.
+upper bound on usefulness rather than a measure of accuracy. For the same
+reason we report no precision, recall or F1 for the detector: seven injected
+windows show that detection works, not how often.
 
 \textbf{No fault has been tested whose cause is not also the loudest metric.}
 Both explaining runs put the injected fault atop a severity ranking, so a
 correct causal answer and a correct severity answer remain indistinguishable.
+On real incidents the two rankings differ about half the time
+(Section~\ref{sec:population}), but none of those incidents has a known
+cause.
 
 \textbf{Granger causality is not causation.} It is correlation under a temporal
 constraint. The FDR correction, effect floor and subsystem prior exist to
 suppress the resulting over-reporting, and Section~\ref{sec:topology} shows the
 prior itself is imperfect.
 
-\textbf{A methodological observation.} Nine defects were found in code carrying
-a passing test suite of 130 tests. In nearly every case the test checked
-something next to what mattered: a database value instead of the bytes on
-disk, one file instead of the full storage footprint, or a function instead
-of the code path that calls it. Two fixes were worse than the defects they
-repaired. These were caught by adversarial review rather than additional
-testing, which we believe generalises beyond this system. The pattern recurred
-once encryption was added: two reviewers independently found the plaintext
-training checkpoint of Section~\ref{sec:deploy} in code whose tests all
-passed, because the tests exercised only the successful path. The suite has
-since grown to 195 tests.
+\textbf{A methodological observation.} Nine defects were found in code with a
+passing suite of 130 tests, each because a test checked something next to what
+mattered (a database value instead of the bytes on disk, a function instead of
+its caller). Adversarial review, not more tests, caught them, and it caught
+the plaintext checkpoint above the same way. The suite now has 195 tests.
 
 %==============================================================================
 \section{Conclusion}
@@ -724,6 +727,10 @@ admit the feedback directions it currently forbids, encrypting the database
 independently of EFS so that Home-edition users receive the same protection,
 and measuring with users whether the default view leads them to correct
 conclusions.
+
+The source code, fault-injection harness and survey scripts are public at
+\url{https://github.com/mathuryashash/RCA-Major_project}. The collected
+telemetry is not released, because it records one person's application use.
 
 %==============================================================================
 \begin{thebibliography}{00}
@@ -806,8 +813,8 @@ Soc. B}, vol.~57, no.~1, pp. 289--300, 1995.
 
 \bibitem{tank2022neural}
 A.~Tank, I.~Covert, N.~Foti, A.~Shojaie, and E.~B. Fox, ``Neural Granger
-causality,'' \emph{IEEE Trans. Pattern Anal. Mach. Intell.}, 2021, early
-access, doi: 10.1109/TPAMI.2021.3065601.
+causality,'' \emph{IEEE Trans. Pattern Anal. Mach. Intell.}, vol.~44,
+no.~8, pp. 4267--4279, 2022.
 
 \bibitem{runge2019pcmci}
 J.~Runge, P.~Nowack, M.~Kretschmer, S.~Flaxman, and D.~Sejdinovic, ``Detecting
@@ -870,7 +877,7 @@ discovery,'' in \emph{Advances in Neural Information Processing Systems
 \bibitem{pham2024root}
 L.~Pham, H.~Ha, and H.~Zhang, ``Root cause analysis for microservice system
 based on causal inference: How far are we?'' in \emph{Proc. 39th IEEE/ACM
-Int. Conf. on Automated Software Engineering (ASE)}, 2024.
+Int. Conf. on Automated Software Engineering (ASE)}, 2024, pp. 706--715.
 
 \bibitem{dickey1979distribution}
 D.~A. Dickey and W.~A. Fuller, ``Distribution of the estimators for
