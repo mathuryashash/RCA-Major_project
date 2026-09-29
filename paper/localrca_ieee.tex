@@ -201,18 +201,19 @@ too short even for the linear test.
 \textbf{Root cause analysis in distributed systems.} Microservice RCA work
 typically exploits service call graphs or distributed traces to constrain
 candidate causes~\cite{kim2013root, chen2014causeinfer}, and Soldani and
-Brogi~\cite{soldani2022survey} survey anomaly detection and root cause analysis
-across service-based cloud applications. A common pattern is to build a
-dependency graph and walk it. CloudRanger~\cite{wang2018cloudranger} learns a
-causal graph with the PC algorithm and ranks candidates by a second-order
-random walk; AutoMAP~\cite{ma2020automap} builds behaviour graphs over several
+Brogi~\cite{soldani2022survey} review how faults are found and traced in
+cloud microservice deployments. Most methods first work out which component
+depends on which and then traverse that structure.
+CloudRanger~\cite{wang2018cloudranger} infers causal structure through
+PC-based discovery and ranks candidates by a second-order random walk; AutoMAP~\cite{ma2020automap} builds behaviour graphs over several
 metrics; MicroRCA~\cite{wu2020microrca} runs personalised PageRank over an
 attributed service--host graph; and MicroCause~\cite{meng2020microcause} pairs
 a PCMCI-derived causal graph with a temporal cause-oriented random walk.
 CIRCA~\cite{li2022circa} derives a structural graph from the system
 architecture and treats root-cause identification as recognising which
-variable was intervened on, while BARO~\cite{pham2024baro} avoids a graph and
-scores metrics with multivariate Bayesian online change-point detection. A
+variable was intervened on, while BARO~\cite{pham2024baro} needs no graph and
+ranks each metric by how sharply its distribution shifts, estimated with a
+Bayesian change-point model. A
 single endpoint has no service topology, so we write an explicit subsystem map
 by hand, and Section~\ref{sec:topology} shows how much the quality of that map
 then matters.
